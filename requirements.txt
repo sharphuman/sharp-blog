@@ -6,3 +6,4 @@ python-docx
 openpyxl
 fpdf
 pyjwt
+requests
