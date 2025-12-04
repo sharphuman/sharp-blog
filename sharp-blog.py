@@ -11,7 +11,7 @@ from pypdf import PdfReader # pip install pypdf
 from docx import Document # pip install python-docx
 
 # --- CONFIGURATION & SECRETS ---
-st.set_page_config(page_title="Elite AI Blog Agent V5", page_icon="🎩", layout="wide")
+st.set_page_config(page_title="Elite AI Blog Agent V6", page_icon="🎩", layout="wide")
 
 try:
     # Ghost Credentials
@@ -69,7 +69,6 @@ def transcribe_audio(file):
         return f"Error transcribing audio: {str(e)}"
 
 def generate_social_links(text, platform):
-    """Generates intent links for social sharing without API keys."""
     encoded_text = urllib.parse.quote(text)
     if platform == "twitter":
         return f"https://twitter.com/intent/tweet?text={encoded_text}"
@@ -79,7 +78,7 @@ def generate_social_links(text, platform):
         return f"https://www.reddit.com/submit?selftext=true&title=Check%20out%20my%20new%20post&text={encoded_text}"
     return "#"
 
-# --- CORE FUNCTIONS ---
+# --- CORE AGENT FUNCTIONS ---
 
 def create_ghost_token():
     try:
@@ -91,11 +90,27 @@ def create_ghost_token():
     except Exception as e:
         return None
 
+def agent_seo_suggestion(topic):
+    """AGENT 0: THE SEO STRATEGIST (Perplexity)"""
+    system_prompt = "You are an SEO expert. Given a topic, suggest 5-7 high-impact, relevant keywords or phrases separated by commas. Do not explain, just list them."
+    try:
+        response = researcher.chat.completions.create(
+            model="sonar-pro",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Topic: {topic}"}
+            ]
+        )
+        return response.choices[0].message.content
+    except Exception as e:
+        return ""
+
 def agent_research(topic, transcript_context=None):
+    """AGENT 1: THE RESEARCHER & TRUTH VALIDATOR (Perplexity)"""
     if transcript_context:
-        system_prompt = "You are a fact-checking assistant. The user has provided context in a file. Find external data, stats, or definitions to support the user's main topic."
+        system_prompt = "You are a specialized Fact-Checking Researcher. The user has provided context in a file. Your job is to: 1. Research the main topic. 2. Verify claims or assumptions that might be relevant. 3. Find external data/stats to validate the user's premise."
     else:
-        system_prompt = "You are an elite academic researcher. Find detailed, factual information on the given topic. Prioritize accurate data, dates, and technical details."
+        system_prompt = "You are an elite academic researcher. Find detailed, factual information on the given topic. Prioritize accurate data, dates, and technical details. Validate all claims with recent sources."
     
     try:
         response = researcher.chat.completions.create(
@@ -110,42 +125,55 @@ def agent_research(topic, transcript_context=None):
         st.error(f"Research Agent Failed: {e}")
         return None
 
-def agent_writer(topic, research_notes, style_sample, temperature, keywords, transcript_text=None):
+def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, transcript_text=None):
+    """AGENT 2: THE WRITER (Claude 3.5 Sonnet)"""
     
-    style_instruction = ""
-    if style_sample:
-        style_instruction = f"""
-        STYLE MIMICRY INSTRUCTIONS:
-        Analyze this writing sample: "{style_sample}"
-        Adopt the sentence structure, vocabulary, and rhythm of this sample.
-        """
-    else:
-        style_instruction = "Use a professional, engaging, and human tone."
+    # Map tone settings to instructions and temperature
+    tone_map = {
+        "Technical": (0.2, "Focus on technical accuracy, use industry jargon appropriate for experts, be precise and dense."),
+        "Professional": (0.5, "Use a clean, corporate, and concise voice. Be authoritative but accessible."),
+        "Conversational": (0.7, "Write like a human speaking to a friend. Use contractions, rhetorical questions, and be relatable."),
+        "Witty": (0.8, "Use clever wordplay, light humor, and an entertaining voice. Be sharp and engaging."),
+        "Storyteller": (0.9, "Focus on narrative arc, emotive language, and painting a scene. Use metaphors and storytelling elements.")
+    }
+    
+    temperature, tone_instruction = tone_map.get(tone_setting, (0.7, "Professional and engaging."))
 
+    # 1. Style Instruction (User sample overrides generic tone if provided)
+    style_instruction = f"TONE: {tone_instruction}"
+    if style_sample:
+        style_instruction += f"""
+        \nSPECIFIC MIMICRY REQUEST:
+        Analyze this writing sample: "{style_sample}"
+        Adopt the sentence structure, vocabulary, and rhythm of this sample, while maintaining the '{tone_setting}' vibe.
+        """
+
+    # 2. Keyword Instruction
     keyword_instruction = ""
     if keywords:
         keyword_instruction = f"""
         SEO MANDATE:
         You MUST naturally include the following keywords in the text: {keywords}.
-        Do not stuff them; use them where they fit logically.
+        Do not stuff them; use them where they fit logically for search optimization.
         """
 
+    # 3. Source Logic
     if transcript_text:
         safe_transcript = transcript_text[:50000]
         source_material_instruction = f"""
         USER'S MAIN GOAL: "{topic}"
         CONTEXT (FILE): {safe_transcript}
-        RESEARCH: {research_notes}
+        RESEARCH (VALIDATION): {research_notes}
 
         INSTRUCTIONS:
         1. Write a blog post addressing the MAIN GOAL.
-        2. Use the CONTEXT to frame the problem/narrative.
-        3. Use RESEARCH to validate claims.
+        2. Use the CONTEXT to frame the problem/narrative (e.g. "As discussed...").
+        3. Use RESEARCH to validate claims and add external credibility.
         """
     else:
         source_material_instruction = f"""
         USER'S MAIN GOAL: "{topic}"
-        RESEARCH: {research_notes}
+        RESEARCH (VALIDATION): {research_notes}
         INSTRUCTIONS: Write a blog post about "{topic}" based on the research.
         """
 
@@ -177,7 +205,6 @@ def agent_writer(topic, research_notes, style_sample, temperature, keywords, tra
         return None
 
 def agent_social_media(blog_content):
-    """AGENT 4: THE SOCIAL MEDIA MANAGER"""
     prompt = f"""
     You are a expert social media manager. Based on this blog post content, generate:
     1. A LinkedIn Post (professional, engaging, bullet points).
@@ -241,7 +268,7 @@ def publish_to_ghost(data, image_url, tags):
 
 # --- UI LAYOUT ---
 
-st.title("🎩 Elite AI Blog Agent V5")
+st.title("🎩 Elite AI Blog Agent V6")
 st.markdown("Research by **Perplexity** | Writing by **Claude** | Art by **DALL-E**")
 
 st.markdown("""
@@ -249,7 +276,7 @@ st.markdown("""
     <h4>🚀 The World's Most Advanced AI Editorial Team</h4>
     <ul>
         <li>🗣️ <b>Context Aware:</b> Upload calls/notes (PDF, Doc, Audio) as backstory.</li>
-        <li>🔍 <b>Fact Checking:</b> Perplexity validates claims.</li>
+        <li>🔍 <b>Research & Validation:</b> Perplexity performs deep research AND <b>fact-checks claims</b> against real-time data.</li>
         <li>✍️ <b>Style & SEO:</b> Claude mimics your voice AND targets your keywords.</li>
         <li>📱 <b>Social Pack:</b> Auto-generates LinkedIn, Twitter & Reddit drafts.</li>
     </ul>
@@ -261,19 +288,49 @@ with st.sidebar:
     st.header("Configuration")
     style_sample = st.text_area("Your Writing Style Sample", height=100, placeholder="Paste a previous blog post...")
     st.divider()
-    temperature = st.slider("Creativity", 0.0, 1.0, 0.7)
+    
+    # IMPROVED SLIDER: Select Box for clearer options
+    st.subheader("Tone & Voice")
+    tone_setting = st.select_slider(
+        "Choose your vibe:",
+        options=["Technical", "Professional", "Conversational", "Witty", "Storyteller"],
+        value="Conversational"
+    )
 
-# MAIN INPUT
+# MAIN INPUT AREA
 col_input, col_file = st.columns([2, 1])
 
 with col_input:
     topic = st.text_input("Main Blog Topic / Prompt", placeholder="e.g. Guide on 'Scaling Databases' addressing pain points in the call...")
-    keywords = st.text_input("Target SEO Keywords (Optional)", placeholder="e.g. database sharding, sql vs nosql")
+    
+    # STEP 2: SEO KEYWORDS (With Suggestion Button)
+    col_seo_btn, col_seo_txt = st.columns([1, 2])
+    with col_seo_btn:
+        st.write("") # Spacer
+        st.write("") # Spacer
+        if st.button("✨ Suggest Keywords", help="Ask Perplexity for high-impact keywords"):
+            if not topic:
+                st.toast("Please enter a topic first!", icon="⚠️")
+            else:
+                with st.spinner("Analyzing SEO trends..."):
+                    suggestions = agent_seo_suggestion(topic)
+                    st.session_state['seo_keywords'] = suggestions
+    
+    with col_seo_txt:
+        # Uses session state to populate if button was clicked
+        keywords = st.text_input(
+            "Target SEO Keywords (Optional)", 
+            value=st.session_state.get('seo_keywords', ''),
+            placeholder="e.g. database sharding, sql vs nosql",
+            help="Edit these or add your own."
+        )
 
 with col_file:
     uploaded_file = st.file_uploader("Attach Context (Optional)", type=['txt', 'md', 'pdf', 'docx', 'mp3', 'mp4', 'm4a', 'mpeg', 'wav'])
 
-if st.button("Start Elite Workflow", type="primary"):
+st.divider()
+
+if st.button("Start Elite Workflow", type="primary", use_container_width=True):
     if not topic:
         st.warning("Please enter a topic.")
     else:
@@ -301,20 +358,20 @@ if st.button("Start Elite Workflow", type="primary"):
                 status.update(label="Context Ready!", state="complete", expanded=False)
 
         # 1. RESEARCH
-        with st.status("🕵️ Agent 1: Perplexity is researching...", expanded=True) as status:
+        with st.status("🕵️ Agent 1: Perplexity is researching & validating...", expanded=True) as status:
             research_data = agent_research(topic, transcript_context=bool(transcript_text))
             if research_data:
-                st.write("✅ Data gathered.")
+                st.write("✅ Facts verified.")
                 est_cost += 0.01 
             else:
                 status.update(label="Research Failed", state="error")
                 st.stop()
             
             # 2. WRITING
-            status.update(label="✍️ Agent 2: Claude is writing...", state="running")
-            blog_post = agent_writer(topic, research_data, style_sample, temperature, keywords, transcript_text)
+            status.update(label=f"✍️ Agent 2: Claude is writing ({tone_setting} tone)...", state="running")
+            blog_post = agent_writer(topic, research_data, style_sample, tone_setting, keywords, transcript_text)
             if blog_post:
-                st.session_state['elite_blog_v5'] = blog_post
+                st.session_state['elite_blog_v6'] = blog_post
                 est_cost += 0.05 
             else:
                 status.update(label="Writing Failed", state="error")
@@ -328,17 +385,17 @@ if st.button("Start Elite Workflow", type="primary"):
             # 4. ART
             status.update(label="🎨 Agent 4: DALL-E is painting...", state="running")
             image_url = agent_artist(topic)
-            st.session_state['elite_image_v5'] = image_url
+            st.session_state['elite_image_v6'] = image_url
             est_cost += 0.04 
             
             st.session_state['est_cost'] = est_cost
             status.update(label="Workflow Complete!", state="complete", expanded=False)
 
 # PREVIEW AREA
-if 'elite_blog_v5' in st.session_state:
-    post = st.session_state['elite_blog_v5']
+if 'elite_blog_v6' in st.session_state:
+    post = st.session_state['elite_blog_v6']
     socials = st.session_state.get('elite_socials', {})
-    img_url = st.session_state.get('elite_image_v5', '')
+    img_url = st.session_state.get('elite_image_v6', '')
     
     st.divider()
     c1, c2 = st.columns([3, 1])
