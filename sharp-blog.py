@@ -125,7 +125,7 @@ def agent_research(topic, transcript_context=None):
         st.error(f"Research Agent Failed: {e}")
         return None
 
-def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, transcript_text=None):
+def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, transcript_text=None, claude_model="claude-3-5-sonnet"):
     """AGENT 2: THE WRITER (Claude 3.5 Sonnet)"""
     
     # Map tone settings to instructions and temperature
@@ -189,7 +189,7 @@ def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, tr
 
     try:
         message = writer.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model=claude_model, # Now uses the selected model
             max_tokens=8000,
             temperature=temperature,
             messages=[{"role": "user", "content": prompt}]
@@ -204,7 +204,7 @@ def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, tr
         st.error(f"Writer Agent Failed: {e}")
         return None
 
-def agent_social_media(blog_content):
+def agent_social_media(blog_content, claude_model="claude-3-5-sonnet"):
     prompt = f"""
     You are a expert social media manager. Based on this blog post content, generate:
     1. A LinkedIn Post (professional, engaging, bullet points).
@@ -219,7 +219,7 @@ def agent_social_media(blog_content):
     """
     try:
         message = writer.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model=claude_model, # Now uses the selected model
             max_tokens=2000,
             temperature=0.7,
             messages=[{"role": "user", "content": prompt}]
@@ -297,6 +297,16 @@ with st.sidebar:
         value="Conversational"
     )
 
+    st.divider()
+    st.subheader("🛠️ Debugging/Model Select")
+    # New Model Selector for troubleshooting 404
+    claude_model_select = st.selectbox(
+        "Claude Model (Select if getting 404 errors):",
+        options=["claude-3-5-sonnet", "claude-3-opus", "claude-3-sonnet", "claude-3-5-sonnet-20241022"],
+        index=0, # Default to the stable alias
+        help="If you just bought your key and get a 404 error, try 'claude-3-opus' first."
+    )
+
 # MAIN INPUT AREA
 col_input, col_file = st.columns([2, 1])
 
@@ -306,8 +316,8 @@ with col_input:
     # STEP 2: SEO KEYWORDS (With Suggestion Button)
     col_seo_btn, col_seo_txt = st.columns([1, 2])
     with col_seo_btn:
-        st.write("") # Spacer
-        st.write("") # Spacer
+        st.write("") 
+        st.write("") 
         if st.button("✨ Suggest Keywords", help="Ask Perplexity for high-impact keywords"):
             if not topic:
                 st.toast("Please enter a topic first!", icon="⚠️")
@@ -369,7 +379,7 @@ if st.button("Start Elite Workflow", type="primary", use_container_width=True):
             
             # 2. WRITING
             status.update(label=f"✍️ Agent 2: Claude is writing ({tone_setting} tone)...", state="running")
-            blog_post = agent_writer(topic, research_data, style_sample, tone_setting, keywords, transcript_text)
+            blog_post = agent_writer(topic, research_data, style_sample, tone_setting, keywords, transcript_text, claude_model_select)
             if blog_post:
                 st.session_state['elite_blog_v6'] = blog_post
                 est_cost += 0.05 
@@ -379,7 +389,7 @@ if st.button("Start Elite Workflow", type="primary", use_container_width=True):
             
             # 3. SOCIAL MEDIA
             status.update(label="📱 Agent 3: Drafting Socials...", state="running")
-            socials = agent_social_media(blog_post['html_content'])
+            socials = agent_social_media(blog_post['html_content'], claude_model_select)
             st.session_state['elite_socials'] = socials
             
             # 4. ART
