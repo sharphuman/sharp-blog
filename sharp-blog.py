@@ -5,9 +5,9 @@ from openai import OpenAI
 
 # --- CONFIGURATION ---
 # Add these to your Streamlit Secrets!
-GHOST_ADMIN_API_KEY = "6931d3c7fae204000147a888:ce4c605e645bdd4ac6b9aceddb55d048f04dccee68e2c96d45fe4f7157092b27"
-GHOST_API_URL = "https://sharphuman.ghost.io"
-OPENAI_API_KEY = "sk-proj-..." # Your OpenAI Key
+GHOST_ADMIN_API_KEY = get_secret("GHOST_ADMIN_API_KEY")
+GHOST_API_URL = get_secret("GHOST_API_URL")
+OPENAI_API_KEY = get_secret("OPENAI_API_KEY") # Your OpenAI Key
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
