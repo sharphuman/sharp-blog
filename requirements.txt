@@ -1,9 +1,5 @@
 streamlit
-openai
-pandas
-pdfplumber
-python-docx
-openpyxl
-fpdf
-pyjwt
 requests
+pyjwt
+openai
+anthropic
