@@ -9,39 +9,43 @@ from anthropic import Anthropic
 from pypdf import PdfReader
 from docx import Document
 from openai import OpenAI
+import os # Import os for environment variable fallback
 
 # --- CONFIGURATION & SECRETS ---
 st.set_page_config(page_title="Elite AI Blog Agent V8 (3-Agent System)", page_icon="🎩", layout="wide")
 
-try:
-    # Ghost Credentials
-    GHOST_ADMIN_KEY = st.secrets.get("GHOST_ADMIN_API_KEY") or st.secrets["GHOST_ADMIN_API_KEY"]
-    GHOST_API_URL = st.secrets.get("GHOST_API_URL") or st.secrets["GHOST_API_URL"]
-    GHOST_API_URL = GHOST_API_URL.rstrip('/')
-    
-    # AI Credentials
-    PPLX_API_KEY = st.secrets.get("PERPLEXITY_API_KEY") or st.secrets["PERPLEXITY_API_KEY"]
-    ANTHROPIC_API_KEY = st.secrets.get("ANTHROPIC_API_KEY") or st.secrets["ANTHROPIC_API_KEY"]
-    OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY") or st.secrets["OPENAI_API_KEY"]
-    
-except Exception as e:
-    # Fallback for when secrets are environment variables
-    import os
-    try:
-        GHOST_ADMIN_KEY = os.environ["GHOST_ADMIN_API_KEY"]
-        GHOST_API_URL = os.environ["GHOST_API_URL"].rstrip('/')
-        PPLX_API_KEY = os.environ["PERPLEXITY_API_KEY"]
-        ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
-        OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
-    except KeyError as env_error:
-        st.error(f"Missing Secrets: {env_error}. Please set all five keys.")
-        st.stop()
-
-# --- SESSION STATE FOR LOGGING ---
+# --- INITIALIZE SESSION STATE ---
 if 'log_events' not in st.session_state:
     st.session_state.log_events = ["System Initialized. Ready for input."]
 if 'current_workflow_status' not in st.session_state:
     st.session_state.current_workflow_status = "Awaiting Topic."
+# Initialize a safe key for the Claude model selection
+if 'claude_model_selection' not in st.session_state:
+    st.session_state.claude_model_selection = "claude-sonnet-4-20250514"
+if 'last_claude_model' not in st.session_state:
+    st.session_state.last_claude_model = "claude-sonnet-4-20250514"
+if 'seo_keywords' not in st.session_state:
+    st.session_state['seo_keywords'] = ""
+if 'elite_blog_v8' not in st.session_state:
+    st.session_state['elite_blog_v8'] = None
+
+
+# --- SECRET LOADING (Centralized and robust) ---
+try:
+    # Ghost Credentials
+    GHOST_ADMIN_KEY = st.secrets.get("GHOST_ADMIN_API_KEY") or os.environ["GHOST_ADMIN_API_KEY"]
+    GHOST_API_URL = (st.secrets.get("GHOST_API_URL") or os.environ["GHOST_API_URL"]).rstrip('/')
+    
+    # AI Credentials
+    PPLX_API_KEY = st.secrets.get("PERPLEXITY_API_KEY") or os.environ["PERPLEXITY_API_KEY"]
+    ANTHROPIC_API_KEY = st.secrets.get("ANTHROPIC_API_KEY") or os.environ["ANTHROPIC_API_KEY"]
+    OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY") or os.environ["OPENAI_API_KEY"]
+    
+except KeyError as e:
+    st.error(f"❌ Missing Secret: {e}. Please set all five keys in `st.secrets` or environment variables.")
+    # Use st.stop() to prevent further execution if keys are missing
+    st.stop()
+
 
 def add_log(message):
     st.session_state.log_events.append(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {message}")
@@ -303,7 +307,7 @@ def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, au
             response_text = response_text.split("```json")[1].split("```")[0]
         elif "```" in response_text:
             response_text = response_text.split("```")[1].split("```")[0]
-        
+            
         add_log("Content drafting complete.")
         return json.loads(response_text)
     except Exception as e:
@@ -350,7 +354,7 @@ def agent_refiner(current_post_json, user_feedback, claude_model="claude-sonnet-
             response_text = response_text.split("```json")[1].split("```")[0]
         elif "```" in response_text:
             response_text = response_text.split("```")[1].split("```")[0]
-        
+            
         add_log("Draft refinement complete.")
         return json.loads(response_text)
     except Exception as e:
@@ -390,7 +394,7 @@ def agent_social_media(blog_content, claude_model="claude-sonnet-4-20250514"):
             response_text = response_text.split("```json")[1].split("```")[0]
         elif "```" in response_text:
             response_text = response_text.split("```")[1].split("```")[0]
-        
+            
         add_log("Social posts generated.")
         return json.loads(response_text)
     except Exception as e:
@@ -445,7 +449,10 @@ def publish_to_ghost(data, image_url, tags):
     token = create_ghost_token()
     if not token:
         add_log("Publish failed: Could not generate Ghost token.")
-        return requests.Response()
+        # Return a dummy response object
+        response = requests.Response()
+        response.status_code = 401
+        return response
 
     headers = {'Authorization': f'Ghost {token}'}
     url = f"{GHOST_API_URL}/ghost/api/admin/posts/?source=html"
@@ -472,7 +479,10 @@ def publish_to_ghost(data, image_url, tags):
         return response
     except Exception as e:
         add_log(f"Publish connection error: {e}")
-        return requests.Response()
+        # Return a dummy response object on connection failure
+        response = requests.Response()
+        response.status_code = 500
+        return response
 
 # --- UI LAYOUT ---
 
@@ -497,6 +507,7 @@ col_tech, col_user, col_log = st.columns(3)
 
 with col_tech:
     st.markdown("**1. Technical Stack**")
+    # Use the session state variable for writer model
     writer_model = st.session_state.get('last_claude_model', 'N/A')
     st.info(f"Writer: {writer_model}\nResearch: Perplexity (Sonar)")
 
@@ -548,13 +559,18 @@ with st.sidebar:
 
     st.divider()
     st.subheader("🛠️ Debugging/Model Select")
-    # --- UPDATED: New model added and set as default index ---
-    claude_model_select = st.selectbox(
+    # --- FIX: Use a key to store selection in session_state, making it robust across re-runs ---
+    st.selectbox(
         "Claude Model (Select if getting 404 errors):",
         options=["claude-sonnet-4-20250514", "claude-3-5-sonnet", "claude-3-opus", "claude-3-sonnet"],
         index=0,
+        key='claude_model_selection', # <-- Stored in session_state
         help="The error means your key cannot access the model. Try switching to a different model if the default fails."
     )
+
+# --- FIX: Safely retrieve the model selection from session state ---
+claude_model_select = st.session_state['claude_model_selection']
+
 
 # MAIN INPUT AREA
 col_input, col_file = st.columns([2, 1])
@@ -582,8 +598,12 @@ with col_input:
             "Target SEO Keywords (Optional)",
             value=st.session_state.get('seo_keywords', ''),
             placeholder="e.g. database sharding, sql vs nosql",
+            key='seo_keywords_input', # Keep value updated in session state
             help="Edit these or add your own."
         )
+        # Update session state with the manually edited value
+        st.session_state['seo_keywords'] = st.session_state['seo_keywords_input']
+
 
 with col_file:
     # Full file support restored
@@ -598,6 +618,7 @@ if st.button("Start Elite Workflow", type="primary", use_container_width=True):
         # Clear logs and set initial status
         st.session_state.log_events = ["Workflow started."]
         st.session_state.current_workflow_status = "Processing Files..."
+        # Use the safely retrieved variable
         st.session_state.last_claude_model = claude_model_select # Save for status display
         
         # ESTIMATED COST TRACKER
@@ -619,7 +640,7 @@ if st.button("Start Elite Workflow", type="primary", use_container_width=True):
                         transcript_text = transcribe_audio(uploaded_file)
                         if "Error" not in transcript_text:
                             est_cost += 0.01
-                    
+                        
                     if transcript_text and "Error" not in transcript_text: st.write(f"✅ Context Loaded.")
                     else: st.error(f"File processing error: {transcript_text}")
                 except Exception as e:
@@ -682,7 +703,7 @@ if st.button("Start Elite Workflow", type="primary", use_container_width=True):
             status.update(label="Workflow Complete!", state="complete", expanded=False)
 
 # PREVIEW AREA
-if 'elite_blog_v8' in st.session_state:
+if st.session_state['elite_blog_v8']:
     post = st.session_state['elite_blog_v8']
     socials = st.session_state.get('elite_socials', {})
     img_url = st.session_state.get('elite_image_v8', '')
@@ -697,19 +718,19 @@ if 'elite_blog_v8' in st.session_state:
     refinement_feedback = st.text_area(
         "Refinement Feedback / Instructions:",
         placeholder="e.g., 'Make the introduction wittier', 'Shorten the third paragraph', or 'Suggest a better title.'",
-        height=100
+        height=100,
+        key='refinement_feedback_input'
     )
     
-    # Use the selected Claude model from the sidebar for refinement
+    # Use the selected Claude model from the session state
     claude_model_select = st.session_state.get('last_claude_model', "claude-sonnet-4-20250514")
 
     if st.button("✨ Refine Draft with Claude", type="secondary", disabled=not refinement_feedback):
         with st.status("🧠 Agent 5: Refinement in progress...", expanded=True) as status:
             st.session_state.current_workflow_status = "Refining Content..."
             
-            # Use the currently displayed post data for refinement
+            # Fetching current UI values to pass to the refiner
             current_post_data = {
-                # Fetching values from Streamlit's session state based on the keys used below
                 'title': st.session_state.get('final_title', post.get('title')),
                 'excerpt': st.session_state.get('final_excerpt', post.get('excerpt')),
                 'meta_title': st.session_state.get('final_meta_title', post.get('meta_title')),
@@ -741,7 +762,7 @@ if 'elite_blog_v8' in st.session_state:
             if img_url: st.image(img_url, caption="Header", use_container_width=True)
             else: st.info("Image generation skipped or failed (Check OpenAI Key).")
         with col2:
-            final_img = st.text_input("Feature Image URL", value=img_url or "", help="Paste your own image URL here, or use the generated one.")
+            final_img = st.text_input("Feature Image URL", value=img_url or "", help="Paste your own image URL here, or use the generated one.", key='final_img_url')
 
         # Text inputs are now refreshed with refined content if needed
         title = st.text_input("Title", value=post.get('title', ''), key='final_title')
@@ -755,22 +776,24 @@ if 'elite_blog_v8' in st.session_state:
         if st.button("🚀 Upload Draft to Ghost"):
             with st.spinner("Uploading..."):
                 # Use the keys from the UI inputs for the final post
-                post.update({
-                    'title': st.session_state['final_title'], 
-                    'excerpt': st.session_state['final_excerpt'], 
-                    'meta_title': st.session_state['final_meta_title'], 
-                    'meta_description': st.session_state['final_meta_desc'], 
-                    'html_content': st.session_state['final_content']
-                })
+                # We need to explicitly check if the key exists before assuming it's been updated by the refinement loop or a manual edit.
+                final_post_data = {
+                    'title': st.session_state.get('final_title', post.get('title')), 
+                    'excerpt': st.session_state.get('final_excerpt', post.get('excerpt')), 
+                    'meta_title': st.session_state.get('final_meta_title', post.get('meta_title')), 
+                    'meta_description': st.session_state.get('final_meta_desc', post.get('meta_description')), 
+                    'html_content': st.session_state.get('final_content', post.get('html_content'))
+                }
+                
                 tags = ["Elite AI"]
                 if uploaded_file: tags.append("Context Aware")
-                result = publish_to_ghost(post, final_img, tags)
+                result = publish_to_ghost(final_post_data, st.session_state['final_img_url'], tags)
                 if result.status_code in [200, 201]:
                     st.balloons()
                     st.success("Success! Draft created.")
                     st.markdown(f"[Open in Ghost Admin]({GHOST_API_URL}/ghost/#/posts)")
                 else:
-                    st.error(f"Error: {result.text}")
+                    st.error(f"Ghost Publishing Error Status: {result.status_code}. Response: {result.text}")
 
     with tab_social:
         st.info("Click the buttons below to open a draft on your favorite platform.")
