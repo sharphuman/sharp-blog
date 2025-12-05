@@ -125,7 +125,7 @@ def agent_research(topic, transcript_context=None):
         st.error(f"Research Agent Failed: {e}")
         return None
 
-def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, transcript_text=None, claude_model="claude-3-5-sonnet"):
+def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, transcript_text=None, claude_model="claude-sonnet-4-20250514"):
     """AGENT 2: THE WRITER (Claude 3.5 Sonnet)"""
     
     # Map tone settings to instructions and temperature
@@ -189,7 +189,7 @@ def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, tr
 
     try:
         message = writer.messages.create(
-            model=claude_model, # Now uses the selected model
+            _model, # Now uses the selected model
             max_tokens=8000,
             temperature=temperature,
             messages=[{"role": "user", "content": prompt}]
@@ -204,7 +204,7 @@ def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, tr
         st.error(f"Writer Agent Failed: {e}")
         return None
 
-def agent_social_media(blog_content, claude_model="claude-3-5-sonnet"):
+def agent_social_media(blog_content, claude_model="claude-sonnet-4-20250514"):
     prompt = f"""
     You are a expert social media manager. Based on this blog post content, generate:
     1. A LinkedIn Post (professional, engaging, bullet points).
