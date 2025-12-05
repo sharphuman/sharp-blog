@@ -13,7 +13,7 @@ import os
 import textstat  # pip install textstat
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Elite AI Blog Agent V10", page_icon="🎩", layout="wide")
+st.set_page_config(page_title="Elite AI Blog Agent V10.1", page_icon="🎩", layout="wide")
 
 # --- CSS: CORPORATE STYLING ---
 st.markdown("""
@@ -113,9 +113,6 @@ def agent_seo(topic):
 
 @st.cache_data(show_spinner=False)
 def agent_research(topic, context):
-    # Cached: Changing 'Tone' won't re-trigger paid research.
-    # We use st.empty() inside the cached function to log, but logs won't appear on cache hit.
-    # That is acceptable for the speed gain.
     sys_prompt = "You are a Fact-Checking Researcher." if context else "You are an elite academic researcher."
     try:
         res = researcher.chat.completions.create(
@@ -184,6 +181,9 @@ def agent_socials(content, model):
     1. LinkedIn: Professional, bullets.
     2. Twitter/X: A THREAD of 3-5 tweets. Tweet 1: Hook. Last Tweet: CTA.
     3. Reddit: Engaging Title + Body.
+    
+    IMPORTANT: Return ONLY valid JSON. No markdown formatting outside the JSON block.
+    
     OUTPUT: JSON with keys: "linkedin", "twitter_thread" (Array of strings), "reddit".
     """
     try:
@@ -192,9 +192,21 @@ def agent_socials(content, model):
             messages=[{"role": "user", "content": prompt}]
         )
         txt = msg.content[0].text
-        if "```json" in txt: txt = txt.split("```json")[1].split("```")[0]
-        return json.loads(txt)
-    except: return {}
+        
+        # --- ROBUST JSON CLEANER ---
+        cleaned_txt = txt.strip()
+        if "```json" in cleaned_txt:
+            cleaned_txt = cleaned_txt.split("```json")[1].split("```")[0]
+        elif "```" in cleaned_txt:
+            cleaned_txt = cleaned_txt.split("```")[1].split("```")[0]
+        
+        cleaned_txt = cleaned_txt.strip()
+        # ---------------------------
+        
+        return json.loads(cleaned_txt)
+    except Exception as e:
+        add_log(f"Socials JSON Error: {e}")
+        return {"linkedin": f"Error generating content: {e}", "twitter_thread": [], "reddit": ""}
 
 def agent_artist(topic, tone, audience, custom_prompt=None):
     add_log("Agent 4 (DALL-E): Generating Art...")
@@ -206,7 +218,6 @@ def agent_artist(topic, tone, audience, custom_prompt=None):
         base_prompt = f"A visualization of {topic}"
 
     # V10 UPGRADE: "ANTI-WEIRD" PROMPTING
-    # We explicitly tell DALL-E to avoid "3D render" styles unless asked.
     visual_style = "Award-winning editorial photography, shot on Leica M11, 50mm lens, soft natural lighting, realistic textures, shallow depth of field."
     
     if "Teenager" in audience or "Child" in audience:
@@ -283,7 +294,7 @@ def upload_ghost(data, img_url, tags):
 
 # --- LAYOUT CONSTRUCTION ---
 
-st.title("🎩 Elite AI Blog Agent V10")
+st.title("🎩 Elite AI Blog Agent V10.1")
 st.markdown("Research by **Perplexity** | Writing by **Claude** | Art by **DALL-E**")
 
 # MAIN COLUMNS
