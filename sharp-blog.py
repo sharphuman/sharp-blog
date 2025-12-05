@@ -43,13 +43,11 @@ try:
     
 except KeyError as e:
     st.error(f"❌ Missing Secret: {e}. Please set all five keys in `st.secrets` or environment variables.")
-    # Use st.stop() to prevent further execution if keys are missing
     st.stop()
 
 
 def add_log(message):
     st.session_state.log_events.append(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {message}")
-    # We keep all logs in session state now for the full scrollable view
 
 # --- INITIALIZE SPECIALISTS ---
 researcher = OpenAI(api_key=PPLX_API_KEY, base_url="https://api.perplexity.ai")
@@ -86,7 +84,6 @@ def transcribe_audio(file):
     if not openai_client_is_valid:
         return "Audio transcription skipped: OpenAI client not initialized."
     try:
-        # Note: file must be a file-like object with a name attribute, or a temp file wrapper
         transcript = openai_client.audio.transcriptions.create(
             model="whisper-1",
             file=file
@@ -96,9 +93,7 @@ def transcribe_audio(file):
         add_log(f"Whisper Error: {str(e)}")
         return f"Error transcribing audio (OpenAI API Issue): {str(e)}"
 
-# --- FIX: Ensure the input is always a string before URL encoding ---
 def generate_social_links(text, platform):
-    # Defensive programming: ensure text is a string to prevent TypeError on quoting
     if isinstance(text, bytes):
         text = text.decode('utf-8')
     elif not isinstance(text, str):
@@ -126,7 +121,6 @@ def create_ghost_token():
         add_log(f"Ghost Token Error: {e}")
         return None
 
-# --- NEW: Function to download DALL-E image and upload it to Ghost ---
 def upload_image_to_ghost(image_url):
     """Downloads image from DALL-E URL and uploads binary data to Ghost's image endpoint."""
     add_log(f"Attempting to upload image from {image_url[:40]}... to Ghost.")
@@ -135,22 +129,18 @@ def upload_image_to_ghost(image_url):
         add_log("Image upload failed: Could not generate Ghost token.")
         return None
 
-    # 1. Download the image data
     try:
         image_response = requests.get(image_url, stream=True)
         image_response.raise_for_status()
         image_data = image_response.content
-        mime_type = image_response.headers.get('Content-Type', 'image/png') # Default to PNG
+        mime_type = image_response.headers.get('Content-Type', 'image/png')
         file_extension = mime_type.split('/')[-1]
         filename = f"dalle_image_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}.{file_extension}"
-        
-        # Use simple in-memory binary data for uploading (Ghost handles optimization)
         files = {'file': (filename, image_data, mime_type)}
     except Exception as e:
         add_log(f"Error downloading image: {e}")
         return None
         
-    # 2. Upload the binary data to Ghost image endpoint
     headers = {'Authorization': f'Ghost {token}'}
     upload_url = f"{GHOST_API_URL}/ghost/api/admin/images/upload/"
     
@@ -189,7 +179,7 @@ def agent_seo_suggestion(topic):
         add_log(f"SEO Suggestion Failed: {e}")
         return ""
 
-def agent_research(topic, transcript_context=None):
+def agent_research(topic, transcript_context):
     """AGENT 1: THE RESEARCHER & TRUTH VALIDATOR (Perplexity)"""
     add_log("Agent 1 (Perplexity) starting research phase...")
     if transcript_context:
@@ -206,18 +196,14 @@ def agent_research(topic, transcript_context=None):
             ]
         )
         add_log("Research data fetched successfully.")
-        # Note: Perplexity often embeds citations/sources within the response text, 
-        # which the Writer Agent will be instructed to extract and reformat.
         return response.choices[0].message.content
     except Exception as e:
         add_log(f"Research Agent Failed: {e}")
         st.error(f"Research Agent Failed: {e}")
         return None
 
-# --- UPDATED: Source Citation and Tone Mandates ---
-def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, audience_setting, transcript_context=None, transcript_text=None, claude_model="claude-sonnet-4-20250514"):
+def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, audience_setting, transcript_context, transcript_text, claude_model="claude-sonnet-4-20250514"):
     """AGENT 2: THE WRITER (Claude)"""
-    # Use a local variable to ensure the model argument is respected
     final_claude_model = claude_model
     add_log(f"Agent 2 (Claude) starting content drafting using model: {final_claude_model}")
     
@@ -231,7 +217,6 @@ def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, au
     
     temperature, tone_instruction = tone_map.get(tone_setting, (0.7, "Professional and engaging."))
 
-    # 1. Style Instruction (User sample overrides generic tone if provided)
     style_instruction = f"TONE: {tone_instruction}"
     if style_sample:
         style_instruction += f"""
@@ -240,7 +225,6 @@ def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, au
         Adopt the sentence structure, vocabulary, and rhythm of this sample, while maintaining the '{tone_setting}' vibe.
         """
 
-    # 2. Keyword Instruction
     keyword_instruction = ""
     if keywords:
         keyword_instruction = f"""
@@ -249,7 +233,6 @@ def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, au
         Do not stuff them; use them where they fit logically for search optimization.
         """
 
-    # 3. Audience Instruction
     audience_instruction = ""
     if audience_setting == "Developer (Technical)":
         audience_instruction = "AUDIENCE: Developer. Use technical depth, code examples (in Markdown format), and focus on implementation details."
@@ -260,8 +243,7 @@ def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, au
     elif audience_setting == "General Public":
         audience_instruction = "AUDIENCE: General Public. Use clear, accessible language, define any complex terms, and focus on relatable real-world impact."
 
-    # 4. Source Logic and Secret Sauce Mandates
-    if transcript_text:
+    if transcript_context and transcript_text:
         safe_transcript = transcript_text[:50000]
         source_material_instruction = f"""
         USER'S MAIN GOAL: "{topic}"
@@ -297,7 +279,7 @@ def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, au
 
     try:
         message = writer.messages.create(
-            model=final_claude_model, # Using the selected model
+            model=final_claude_model,
             max_tokens=8000,
             temperature=temperature,
             messages=[{"role": "user", "content": prompt}]
@@ -315,12 +297,10 @@ def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, au
         st.error(f"Writer Agent Failed: {e}")
         return None
 
-# --- NEW AGENT: Refinement Loop ---
 def agent_refiner(current_post_json, user_feedback, claude_model="claude-sonnet-4-20250514"):
     """AGENT 5: THE EDITOR/REFINER (Claude)"""
     add_log(f"Agent 5 (Claude) refining content based on feedback.")
     
-    # Use the current post data stringified
     current_content_str = json.dumps(current_post_json, indent=2)
     
     prompt = f"""
@@ -346,7 +326,7 @@ def agent_refiner(current_post_json, user_feedback, claude_model="claude-sonnet-
         message = writer.messages.create(
             model=claude_model,
             max_tokens=8000,
-            temperature=0.4, # Lower temperature for editing stability
+            temperature=0.4,
             messages=[{"role": "user", "content": prompt}]
         )
         response_text = message.content[0].text
@@ -363,10 +343,8 @@ def agent_refiner(current_post_json, user_feedback, claude_model="claude-sonnet-
         return None
 
 
-# --- UPDATED: Default model is now "claude-sonnet-4-20250514" ---
 def agent_social_media(blog_content, claude_model="claude-sonnet-4-20250514"):
     """AGENT 3: THE SOCIAL MEDIA MANAGER (Claude)"""
-    # Use a local variable to ensure the model argument is respected
     final_claude_model = claude_model
     add_log(f"Agent 3 (Claude) drafting social posts using model: {final_claude_model}")
     
@@ -384,7 +362,7 @@ def agent_social_media(blog_content, claude_model="claude-sonnet-4-20250514"):
     """
     try:
         message = writer.messages.create(
-            model=final_claude_model, # Using the selected model
+            model=final_claude_model,
             max_tokens=2000,
             temperature=0.7,
             messages=[{"role": "user", "content": prompt}]
@@ -401,7 +379,6 @@ def agent_social_media(blog_content, claude_model="claude-sonnet-4-20250514"):
         add_log(f"Social Media Agent Failed: {e}")
         return {"linkedin": "Error", "twitter": "Error", "reddit": "Error"}
 
-# --- UPDATED: Now accepts tone and audience for better image generation ---
 def agent_artist(topic, tone_setting, audience_setting):
     """AGENT 4: THE ARTIST (DALL-E)"""
     add_log("Agent 4 (DALL-E) starting image generation...")
@@ -410,7 +387,6 @@ def agent_artist(topic, tone_setting, audience_setting):
         add_log("DALL-E skipped due to invalid key.")
         return None
     
-    # --- NEW: Dynamic Prompt Generation based on Audience/Tone ---
     style_modifier = ""
     if audience_setting == "Developer (Technical)":
         style_modifier = "Focus on clean UI/UX, schematic representations, or minimalist code aesthetics."
@@ -426,7 +402,6 @@ def agent_artist(topic, tone_setting, audience_setting):
 
     prompt = f"A high-quality, modern editorial illustration about {topic}. {style_modifier} Minimalist, tech-forward, 16:9 aspect ratio. No text."
     add_log(f"DALL-E Prompt: {prompt[:80]}...")
-    # --- END NEW LOGIC ---
 
     try:
         response = openai_client.images.generate(
@@ -437,7 +412,6 @@ def agent_artist(topic, tone_setting, audience_setting):
             n=1,
         )
         add_log("Image URL received.")
-        # Return the original URL; the workflow will now upload it to Ghost
         return response.data[0].url
     except Exception as e:
         add_log(f"Image generation failed: {e}")
@@ -449,7 +423,6 @@ def publish_to_ghost(data, image_url, tags):
     token = create_ghost_token()
     if not token:
         add_log("Publish failed: Could not generate Ghost token.")
-        # Return a dummy response object
         response = requests.Response()
         response.status_code = 401
         return response
@@ -479,7 +452,6 @@ def publish_to_ghost(data, image_url, tags):
         return response
     except Exception as e:
         add_log(f"Publish connection error: {e}")
-        # Return a dummy response object on connection failure
         response = requests.Response()
         response.status_code = 500
         return response
@@ -507,7 +479,6 @@ col_tech, col_user, col_log = st.columns(3)
 
 with col_tech:
     st.markdown("**1. Technical Stack**")
-    # Use the session state variable for writer model
     writer_model = st.session_state.get('last_claude_model', 'N/A')
     st.info(f"Writer: {writer_model}\nResearch: Perplexity (Sonar)")
 
@@ -517,7 +488,6 @@ with col_user:
     
 with col_log:
     st.markdown("**3. Live Logging**")
-    # --- UPDATED: Full, scrollable log area ---
     log_content = "\n".join(st.session_state.log_events)
     st.text_area(
         label="Log History",
@@ -538,7 +508,6 @@ with st.sidebar:
     style_sample = st.text_area("Your Writing Style Sample", height=100, placeholder="Paste a previous blog post...")
     st.divider()
     
-    # IMPROVED SLIDER: Select Box for clearer options
     st.subheader("Tone & Voice")
     tone_setting = st.select_slider(
         "Choose your vibe:",
@@ -547,7 +516,6 @@ with st.sidebar:
     )
 
     st.divider()
-    # --- NEW: Target Audience Selector ---
     st.subheader("Target Audience")
     audience_setting = st.selectbox(
         "Who is reading this post?",
@@ -559,12 +527,11 @@ with st.sidebar:
 
     st.divider()
     st.subheader("🛠️ Debugging/Model Select")
-    # --- FIX: Use a key to store selection in session_state, making it robust across re-runs ---
     st.selectbox(
         "Claude Model (Select if getting 404 errors):",
         options=["claude-sonnet-4-20250514", "claude-3-5-sonnet", "claude-3-opus", "claude-3-sonnet"],
         index=0,
-        key='claude_model_selection', # <-- Stored in session_state
+        key='claude_model_selection',
         help="The error means your key cannot access the model. Try switching to a different model if the default fails."
     )
 # (End of with st.sidebar: block)
@@ -580,7 +547,6 @@ col_input, col_file = st.columns([2, 1])
 with col_input:
     topic = st.text_input("Main Blog Topic / Prompt", placeholder="e.g. Guide on 'Scaling Databases' addressing pain points in the call...")
     
-    # STEP 2: SEO KEYWORDS (With Suggestion Button)
     col_seo_btn, col_seo_txt = st.columns([1, 2])
     with col_seo_btn:
         st.write("")
@@ -600,15 +566,13 @@ with col_input:
             "Target SEO Keywords (Optional)",
             value=st.session_state.get('seo_keywords', ''),
             placeholder="e.g. database sharding, sql vs nosql",
-            key='seo_keywords_input', # Keep value updated in session state
+            key='seo_keywords_input',
             help="Edit these or add your own."
         )
-        # Update session state with the manually edited value
         st.session_state['seo_keywords'] = st.session_state['seo_keywords_input']
 
 
 with col_file:
-    # Full file support restored
     uploaded_file = st.file_uploader("Attach Context (Optional)", type=['txt', 'md', 'pdf', 'docx', 'mp3', 'mp4', 'm4a', 'mpeg', 'wav'])
 
 st.divider()
@@ -620,24 +584,26 @@ if st.button("Start Elite Workflow", type="primary", use_container_width=True):
         # Clear logs and set initial status
         st.session_state.log_events = ["Workflow started."]
         st.session_state.current_workflow_status = "Processing Files..."
-        # Use the safely retrieved variable
-        st.session_state.last_claude_model = claude_model_select # Save for status display
+        st.session_state.last_claude_model = claude_model_select
         
         # ESTIMATED COST TRACKER
         est_cost = 0.00
         
         # PROCESS FILE
         transcript_text = None
+        # --- FIX: Initialize transcript_context to prevent NameError if no file is uploaded ---
+        transcript_context = False 
+        
+        # Check if a file was uploaded, and if so, perform size checks
         if uploaded_file:
             file_type = uploaded_file.name.split('.')[-1].lower()
             add_log(f"File detected: {uploaded_file.name}. Type: {file_type}")
             
-            # --- FIX: Add file size check for audio before processing ---
+            # --- FIX: Audio file size check for OpenAI Whisper limit (25MB) ---
             if file_type in ['mp3', 'mp4', 'm4a', 'mpeg', 'wav']:
-                # Whisper limit is 25MB (26,214,400 bytes)
-                if uploaded_file.size > 26000000:
+                if uploaded_file.size > 26000000: # ~25MB
                     st.error("Audio file is too large (>25MB). Please compress the audio or use a smaller file.")
-                    uploaded_file = None # Prevent the file from being processed
+                    uploaded_file = None # Prevent processing the oversized file
             # --- END FIX ---
             
             if uploaded_file: # Only proceed if the file passed the size check or wasn't audio
@@ -652,8 +618,12 @@ if st.button("Start Elite Workflow", type="primary", use_container_width=True):
                             if "Error" not in transcript_text:
                                 est_cost += 0.01
                             
-                        if transcript_text and "Error" not in transcript_text: st.write(f"✅ Context Loaded.")
-                        else: st.error(f"File processing error: {transcript_text}")
+                        if transcript_text and "Error" not in transcript_text: 
+                            st.write(f"✅ Context Loaded.")
+                            # Set the flag to true if context was successfully loaded
+                            transcript_context = True 
+                        else: 
+                            st.error(f"File processing error: {transcript_text}")
                     except Exception as e:
                         add_log(f"FATAL File processing error: {e}")
                         status.update(label="Context Processing Failed", state="error")
@@ -663,7 +633,8 @@ if st.button("Start Elite Workflow", type="primary", use_container_width=True):
         # 1. RESEARCH
         st.session_state.current_workflow_status = "Researching and Validating Facts..."
         with st.status("🕵️ Agent 1: Perplexity is researching & validating...", expanded=True) as status:
-            research_data = agent_research(topic, transcript_context=bool(transcript_text))
+            # Note: transcript_context is now always defined
+            research_data = agent_research(topic, transcript_context) 
             if research_data:
                 st.write("✅ Facts verified.")
                 est_cost += 0.01
@@ -674,12 +645,10 @@ if st.button("Start Elite Workflow", type="primary", use_container_width=True):
             # 2. WRITING
             st.session_state.current_workflow_status = "Drafting Content (Claude)..."
             status.update(label=f"✍️ Agent 2: Claude is writing ({tone_setting} tone, for {audience_setting})...", state="running")
-            # --- Pass audience_setting to the writer agent ---
-            # claude_model_select is now guaranteed to be defined (NameError fixed)
+            # Note: transcript_context is now passed safely
             blog_post = agent_writer(topic, research_data, style_sample, tone_setting, keywords, audience_setting, transcript_context, transcript_text, claude_model_select)
             if blog_post:
                 st.session_state['elite_blog_v8'] = blog_post
-                # Placeholder cost for Claude 3.5 Sonnet (~$0.003/k token, estimating $0.05 per long post)
                 est_cost += 0.05
             else:
                 status.update(label="Writing Failed", state="error")
@@ -688,26 +657,23 @@ if st.button("Start Elite Workflow", type="primary", use_container_width=True):
             # 3. SOCIAL MEDIA
             st.session_state.current_workflow_status = "Generating Social Media Assets..."
             status.update(label="📱 Agent 3: Drafting Socials...", state="running")
-            # --- Pass the user-selected model ---
             socials = agent_social_media(blog_post['html_content'], claude_model_select)
             st.session_state['elite_socials'] = socials
             
             # 4. ART & IMAGE UPLOAD
             st.session_state.current_workflow_status = "Generating Image & Uploading to Ghost..."
             status.update(label="🎨 Agent 4: DALL-E is painting...", state="running")
-            # Generate the temporary DALL-E URL
             temp_image_url = agent_artist(topic, tone_setting, audience_setting)
             
             ghost_image_url = None
             if temp_image_url:
-                # --- NEW: Download and upload to Ghost for hosting/optimization ---
                 status.update(label="☁️ Uploading Image to Ghost for Hosting...", state="running")
                 ghost_image_url = upload_image_to_ghost(temp_image_url)
                 if ghost_image_url:
                     est_cost += 0.04
                 else:
                     st.warning("Ghost image upload failed. Using DALL-E URL directly.")
-                    ghost_image_url = temp_image_url # Fallback
+                    ghost_image_url = temp_image_url
             
             st.session_state['elite_image_v8'] = ghost_image_url
             st.session_state['est_cost'] = est_cost
@@ -734,14 +700,12 @@ if st.session_state['elite_blog_v8']:
         key='refinement_feedback_input'
     )
     
-    # Use the selected Claude model from the session state
     claude_model_select_refine = st.session_state.get('last_claude_model', "claude-sonnet-4-20250514")
 
     if st.button("✨ Refine Draft with Claude", type="secondary", disabled=not refinement_feedback):
         with st.status("🧠 Agent 5: Refinement in progress...", expanded=True) as status:
             st.session_state.current_workflow_status = "Refining Content..."
             
-            # Fetching current UI values to pass to the refiner
             current_post_data = {
                 'title': st.session_state.get('final_title', post.get('title')),
                 'excerpt': st.session_state.get('final_excerpt', post.get('excerpt')),
@@ -753,10 +717,9 @@ if st.session_state['elite_blog_v8']:
             refined_post = agent_refiner(current_post_data, refinement_feedback, claude_model_select_refine)
             
             if refined_post:
-                st.session_state['elite_blog_v8'] = refined_post # Overwrite the session state with new draft
+                st.session_state['elite_blog_v8'] = refined_post
                 st.session_state.current_workflow_status = "Refinement Complete."
                 status.update(label="Draft Refined!", state="complete")
-                # Force a re-run to refresh the text areas with the new content
                 st.rerun() 
             else:
                 status.update(label="Refinement Failed", state="error")
@@ -776,7 +739,6 @@ if st.session_state['elite_blog_v8']:
         with col2:
             final_img = st.text_input("Feature Image URL", value=img_url or "", help="Paste your own image URL here, or use the generated one.", key='final_img_url')
 
-        # Text inputs are now refreshed with refined content if needed
         title = st.text_input("Title", value=post.get('title', ''), key='final_title')
         with st.expander("SEO Metadata"):
             meta_title = st.text_input("Meta Title", value=post.get('meta_title', ''), key='final_meta_title')
@@ -787,8 +749,6 @@ if st.session_state['elite_blog_v8']:
 
         if st.button("🚀 Upload Draft to Ghost"):
             with st.spinner("Uploading..."):
-                # Use the keys from the UI inputs for the final post
-                # We need to explicitly check if the key exists before assuming it's been updated by the refinement loop or a manual edit.
                 final_post_data = {
                     'title': st.session_state.get('final_title', post.get('title')), 
                     'excerpt': st.session_state.get('final_excerpt', post.get('excerpt')), 
@@ -798,7 +758,7 @@ if st.session_state['elite_blog_v8']:
                 }
                 
                 tags = ["Elite AI"]
-                if st.session_state.get('uploaded_file'): tags.append("Context Aware")
+                if uploaded_file and transcript_context: tags.append("Context Aware")
                 result = publish_to_ghost(final_post_data, st.session_state['final_img_url'], tags)
                 if result.status_code in [200, 201]:
                     st.balloons()
@@ -810,21 +770,18 @@ if st.session_state['elite_blog_v8']:
     with tab_social:
         st.info("Click the buttons below to open a draft on your favorite platform.")
         
-        # LinkedIn
         li_text = socials.get('linkedin', '')
         st.text_area("LinkedIn Draft", value=li_text, height=150)
         st.link_button("Post to LinkedIn", generate_social_links(li_text, "linkedin"))
         
         st.divider()
         
-        # Twitter
         tw_text = socials.get('twitter', '')
         st.text_area("X / Twitter Draft", value=tw_text, height=100)
         st.link_button("Post to X", generate_social_links(tw_text, "twitter"))
         
         st.divider()
 
-        # Reddit
         rd_text = socials.get('reddit', '')
         st.text_area("Reddit Draft", value=rd_text, height=100)
         st.link_button("Post to Reddit", generate_social_links(rd_text, "reddit"))
