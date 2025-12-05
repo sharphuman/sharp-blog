@@ -45,8 +45,7 @@ if 'current_workflow_status' not in st.session_state:
 
 def add_log(message):
     st.session_state.log_events.append(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] {message}")
-    if len(st.session_state.log_events) > 10:
-        st.session_state.log_events = st.session_state.log_events[-10:]
+    # We keep all logs in session state now for the full scrollable view
 
 # --- INITIALIZE SPECIALISTS ---
 researcher = OpenAI(api_key=PPLX_API_KEY, base_url="https://api.perplexity.ai")
@@ -93,7 +92,14 @@ def transcribe_audio(file):
         add_log(f"Whisper Error: {str(e)}")
         return f"Error transcribing audio (OpenAI API Issue): {str(e)}"
 
+# --- FIX: Ensure the input is always a string before URL encoding ---
 def generate_social_links(text, platform):
+    # Defensive programming: ensure text is a string to prevent TypeError on quoting
+    if isinstance(text, bytes):
+        text = text.decode('utf-8')
+    elif not isinstance(text, str):
+        text = str(text) 
+
     encoded_text = urllib.parse.quote(text)
     if platform == "twitter":
         return f"https://twitter.com/intent/tweet?text={encoded_text}"
@@ -115,6 +121,51 @@ def create_ghost_token():
     except Exception as e:
         add_log(f"Ghost Token Error: {e}")
         return None
+
+# --- NEW: Function to download DALL-E image and upload it to Ghost ---
+def upload_image_to_ghost(image_url):
+    """Downloads image from DALL-E URL and uploads binary data to Ghost's image endpoint."""
+    add_log(f"Attempting to upload image from {image_url[:40]}... to Ghost.")
+    token = create_ghost_token()
+    if not token:
+        add_log("Image upload failed: Could not generate Ghost token.")
+        return None
+
+    # 1. Download the image data
+    try:
+        image_response = requests.get(image_url, stream=True)
+        image_response.raise_for_status()
+        image_data = image_response.content
+        mime_type = image_response.headers.get('Content-Type', 'image/png') # Default to PNG
+        file_extension = mime_type.split('/')[-1]
+        filename = f"dalle_image_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}.{file_extension}"
+        
+        # Use simple in-memory binary data for uploading (Ghost handles optimization)
+        files = {'file': (filename, image_data, mime_type)}
+    except Exception as e:
+        add_log(f"Error downloading image: {e}")
+        return None
+        
+    # 2. Upload the binary data to Ghost image endpoint
+    headers = {'Authorization': f'Ghost {token}'}
+    upload_url = f"{GHOST_API_URL}/ghost/api/admin/images/upload/"
+    
+    try:
+        upload_response = requests.post(upload_url, headers=headers, files=files)
+        upload_response.raise_for_status()
+        
+        uploaded_data = upload_response.json()
+        ghost_url = uploaded_data['images'][0]['url']
+        add_log(f"Image successfully uploaded to Ghost. URL: {ghost_url[:40]}...")
+        return ghost_url
+    except requests.exceptions.HTTPError as http_err:
+        add_log(f"Ghost image upload HTTP error: {http_err}. Response: {upload_response.text[:100]}")
+        st.error(f"Ghost image upload failed. Check Ghost API permissions. Status: {upload_response.status_code}")
+        return None
+    except Exception as e:
+        add_log(f"Ghost image upload error: {e}")
+        return None
+
 
 def agent_seo_suggestion(topic):
     """AGENT 0: THE SEO STRATEGIST (Perplexity)"""
@@ -151,14 +202,16 @@ def agent_research(topic, transcript_context=None):
             ]
         )
         add_log("Research data fetched successfully.")
+        # Note: Perplexity often embeds citations/sources within the response text, 
+        # which the Writer Agent will be instructed to extract and reformat.
         return response.choices[0].message.content
     except Exception as e:
         add_log(f"Research Agent Failed: {e}")
         st.error(f"Research Agent Failed: {e}")
         return None
 
-# --- UPDATED: Default model is now "claude-sonnet-4-20250514" ---
-def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, transcript_text=None, claude_model="claude-sonnet-4-20250514"):
+# --- UPDATED: Source Citation and Tone Mandates ---
+def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, audience_setting, transcript_context=None, transcript_text=None, claude_model="claude-sonnet-4-20250514"):
     """AGENT 2: THE WRITER (Claude)"""
     # Use a local variable to ensure the model argument is respected
     final_claude_model = claude_model
@@ -192,7 +245,18 @@ def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, tr
         Do not stuff them; use them where they fit logically for search optimization.
         """
 
-    # 3. Source Logic
+    # 3. Audience Instruction
+    audience_instruction = ""
+    if audience_setting == "Developer (Technical)":
+        audience_instruction = "AUDIENCE: Developer. Use technical depth, code examples (in Markdown format), and focus on implementation details."
+    elif audience_setting == "Executive (Strategy/ROI)":
+        audience_instruction = "AUDIENCE: Executive. Focus on strategic impact, return on investment (ROI), business outcomes, and high-level summaries. Avoid deep technical jargon."
+    elif audience_setting == "Recruiter (Career/Skills)":
+        audience_instruction = "AUDIENCE: Recruiter. Focus on relevant skills, industry trends related to hiring, and career progression. Emphasize transferable skills."
+    elif audience_setting == "General Public":
+        audience_instruction = "AUDIENCE: General Public. Use clear, accessible language, define any complex terms, and focus on relatable real-world impact."
+
+    # 4. Source Logic and Secret Sauce Mandates
     if transcript_text:
         safe_transcript = transcript_text[:50000]
         source_material_instruction = f"""
@@ -204,12 +268,16 @@ def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, tr
         1. Write a blog post addressing the MAIN GOAL.
         2. Use the CONTEXT to frame the problem/narrative (e.g. "As discussed...").
         3. Use RESEARCH to validate claims and add external credibility.
+        4. CRITICAL: **Do not use in-paragraph hyperlinks or citations.** Instead, extract the main source URLs (if any exist in RESEARCH) and list them clearly at the very bottom of the HTML content under a section titled "Sources and Further Reading".
+        5. **TONE MANDATE:** Do not give away proprietary or overly technical 'secret sauce'. Entice the reader to seek further expert consultation (e.g., from 'Sharp Human's services') for implementation or advanced solutions.
         """
     else:
         source_material_instruction = f"""
         USER'S MAIN GOAL: "{topic}"
         RESEARCH (VALIDATION): {research_notes}
         INSTRUCTIONS: Write a blog post about "{topic}" based on the research.
+        4. CRITICAL: **Do not use in-paragraph hyperlinks or citations.** Instead, extract the main source URLs (if any exist in RESEARCH) and list them clearly at the very bottom of the HTML content under a section titled "Sources and Further Reading".
+        5. **TONE MANDATE:** Do not give away proprietary or overly technical 'secret sauce'. Entice the reader to seek further expert consultation (e.g., from 'Sharp Human's services') for implementation or advanced solutions.
         """
 
     prompt = f"""
@@ -217,6 +285,7 @@ def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, tr
     {source_material_instruction}
     {style_instruction}
     {keyword_instruction}
+    {audience_instruction}
     
     OUTPUT FORMAT:
     Return a valid JSON object with keys: "title", "meta_title", "meta_description", "excerpt", "html_content" (semantic HTML).
@@ -241,6 +310,54 @@ def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, tr
         add_log(f"Writing Failed: {e}")
         st.error(f"Writer Agent Failed: {e}")
         return None
+
+# --- NEW AGENT: Refinement Loop ---
+def agent_refiner(current_post_json, user_feedback, claude_model="claude-sonnet-4-20250514"):
+    """AGENT 5: THE EDITOR/REFINER (Claude)"""
+    add_log(f"Agent 5 (Claude) refining content based on feedback.")
+    
+    # Use the current post data stringified
+    current_content_str = json.dumps(current_post_json, indent=2)
+    
+    prompt = f"""
+    You are a world-class editorial editor, tasked with refining a draft blog post based on user feedback.
+
+    CURRENT DRAFT (JSON):
+    {current_content_str}
+
+    USER FEEDBACK / REFINEMENT INSTRUCTIONS:
+    {user_feedback}
+
+    INSTRUCTIONS:
+    1. Apply ALL user feedback to the current draft (TITLE, METADATA, HTML_CONTENT, etc.).
+    2. Maintain the original professional ghostwriter style.
+    3. Ensure the output is a VALID, complete JSON object.
+    4. CRITICAL: **Maintain all previous tone and citation mandates.** The final HTML content MUST NOT contain in-paragraph hyperlinks and MUST contain a "Sources and Further Reading" section at the end. The tone should entice the reader to seek further services (e.g., from 'Sharp Human's services').
+
+    OUTPUT FORMAT:
+    Return a valid JSON object with keys: "title", "meta_title", "meta_description", "excerpt", "html_content" (semantic HTML).
+    """
+
+    try:
+        message = writer.messages.create(
+            model=claude_model,
+            max_tokens=8000,
+            temperature=0.4, # Lower temperature for editing stability
+            messages=[{"role": "user", "content": prompt}]
+        )
+        response_text = message.content[0].text
+        if "```json" in response_text:
+            response_text = response_text.split("```json")[1].split("```")[0]
+        elif "```" in response_text:
+            response_text = response_text.split("```")[1].split("```")[0]
+        
+        add_log("Draft refinement complete.")
+        return json.loads(response_text)
+    except Exception as e:
+        add_log(f"Refinement Failed: {e}")
+        st.error(f"Refinement Agent Failed: {e}")
+        return None
+
 
 # --- UPDATED: Default model is now "claude-sonnet-4-20250514" ---
 def agent_social_media(blog_content, claude_model="claude-sonnet-4-20250514"):
@@ -280,22 +397,43 @@ def agent_social_media(blog_content, claude_model="claude-sonnet-4-20250514"):
         add_log(f"Social Media Agent Failed: {e}")
         return {"linkedin": "Error", "twitter": "Error", "reddit": "Error"}
 
-def agent_artist(topic):
+# --- UPDATED: Now accepts tone and audience for better image generation ---
+def agent_artist(topic, tone_setting, audience_setting):
     """AGENT 4: THE ARTIST (DALL-E)"""
     add_log("Agent 4 (DALL-E) starting image generation...")
     global openai_client_is_valid
     if not openai_client_is_valid:
         add_log("DALL-E skipped due to invalid key.")
         return None
+    
+    # --- NEW: Dynamic Prompt Generation based on Audience/Tone ---
+    style_modifier = ""
+    if audience_setting == "Developer (Technical)":
+        style_modifier = "Focus on clean UI/UX, schematic representations, or minimalist code aesthetics."
+    elif audience_setting == "Executive (Strategy/ROI)":
+        style_modifier = "Focus on abstract concepts of growth, strategy, or high-level business metaphors."
+    elif audience_setting == "Recruiter (Career/Skills)":
+        style_modifier = "Focus on human connection, diverse teams, or career path visualizations."
+    
+    if tone_setting in ["Witty", "Storyteller"]:
+        style_modifier += " Use a vibrant, slightly playful, or narrative-driven style."
+    else:
+        style_modifier += " Maintain a professional and modern editorial feel."
+
+    prompt = f"A high-quality, modern editorial illustration about {topic}. {style_modifier} Minimalist, tech-forward, 16:9 aspect ratio. No text."
+    add_log(f"DALL-E Prompt: {prompt[:80]}...")
+    # --- END NEW LOGIC ---
+
     try:
         response = openai_client.images.generate(
             model="dall-e-3",
-            prompt=f"A high-quality, modern editorial illustration about {topic}. Minimalist, tech-forward, 16:9 aspect ratio. No text.",
+            prompt=prompt,
             size="1024x1024",
             quality="standard",
             n=1,
         )
         add_log("Image URL received.")
+        # Return the original URL; the workflow will now upload it to Ghost
         return response.data[0].url
     except Exception as e:
         add_log(f"Image generation failed: {e}")
@@ -368,8 +506,16 @@ with col_user:
     
 with col_log:
     st.markdown("**3. Live Logging**")
-    log_display = st.empty()
-    log_display.code("\n".join(st.session_state.log_events), language='text')
+    # --- UPDATED: Full, scrollable log area ---
+    log_content = "\n".join(st.session_state.log_events)
+    st.text_area(
+        label="Log History",
+        value=log_content,
+        height=200,
+        disabled=True,
+        key="log_display_area",
+        help="All log events are captured here for review and copy/paste."
+    )
 # --- END STATUS DASHBOARD ---
 
 # SIDEBAR
@@ -387,6 +533,17 @@ with st.sidebar:
         "Choose your vibe:",
         options=["Technical", "Professional", "Conversational", "Witty", "Storyteller"],
         value="Conversational"
+    )
+
+    st.divider()
+    # --- NEW: Target Audience Selector ---
+    st.subheader("Target Audience")
+    audience_setting = st.selectbox(
+        "Who is reading this post?",
+        options=["General Public", "Developer (Technical)", "Executive (Strategy/ROI)", "Recruiter (Career/Skills)"],
+        index=0,
+        key="audience_setting_select",
+        help="This dictates the level of jargon and focus (e.g., code vs. business value)."
     )
 
     st.divider()
@@ -484,9 +641,9 @@ if st.button("Start Elite Workflow", type="primary", use_container_width=True):
             
             # 2. WRITING
             st.session_state.current_workflow_status = "Drafting Content (Claude)..."
-            status.update(label=f"✍️ Agent 2: Claude is writing ({tone_setting} tone)...", state="running")
-            # --- Pass the user-selected model ---
-            blog_post = agent_writer(topic, research_data, style_sample, tone_setting, keywords, transcript_text, claude_model_select)
+            status.update(label=f"✍️ Agent 2: Claude is writing ({tone_setting} tone, for {audience_setting})...", state="running")
+            # --- Pass audience_setting to the writer agent ---
+            blog_post = agent_writer(topic, research_data, style_sample, tone_setting, keywords, audience_setting, transcript_context, transcript_text, claude_model_select)
             if blog_post:
                 st.session_state['elite_blog_v8'] = blog_post
                 # Placeholder cost for Claude 3.5 Sonnet (~$0.003/k token, estimating $0.05 per long post)
@@ -502,15 +659,24 @@ if st.button("Start Elite Workflow", type="primary", use_container_width=True):
             socials = agent_social_media(blog_post['html_content'], claude_model_select)
             st.session_state['elite_socials'] = socials
             
-            # 4. ART
-            st.session_state.current_workflow_status = "Generating Image..."
+            # 4. ART & IMAGE UPLOAD
+            st.session_state.current_workflow_status = "Generating Image & Uploading to Ghost..."
             status.update(label="🎨 Agent 4: DALL-E is painting...", state="running")
-            image_url = agent_artist(topic)
-            if image_url:
-                # Placeholder cost for DALL-E 3
-                est_cost += 0.04
+            # Generate the temporary DALL-E URL
+            temp_image_url = agent_artist(topic, tone_setting, audience_setting)
             
-            st.session_state['elite_image_v8'] = image_url
+            ghost_image_url = None
+            if temp_image_url:
+                # --- NEW: Download and upload to Ghost for hosting/optimization ---
+                status.update(label="☁️ Uploading Image to Ghost for Hosting...", state="running")
+                ghost_image_url = upload_image_to_ghost(temp_image_url)
+                if ghost_image_url:
+                    est_cost += 0.04
+                else:
+                    st.warning("Ghost image upload failed. Using DALL-E URL directly.")
+                    ghost_image_url = temp_image_url # Fallback
+            
+            st.session_state['elite_image_v8'] = ghost_image_url
             st.session_state['est_cost'] = est_cost
             st.session_state.current_workflow_status = "Draft Ready for Review."
             status.update(label="Workflow Complete!", state="complete", expanded=False)
@@ -526,6 +692,46 @@ if 'elite_blog_v8' in st.session_state:
     with c1: st.subheader("Review & Publish")
     with c2: st.caption(f"Est. Generation Cost: ${st.session_state.get('est_cost', 0.00):.2f}")
 
+    # --- NEW: Refinement Section ---
+    st.subheader("🔄 Post-Draft Refinement")
+    refinement_feedback = st.text_area(
+        "Refinement Feedback / Instructions:",
+        placeholder="e.g., 'Make the introduction wittier', 'Shorten the third paragraph', or 'Suggest a better title.'",
+        height=100
+    )
+    
+    # Use the selected Claude model from the sidebar for refinement
+    claude_model_select = st.session_state.get('last_claude_model', "claude-sonnet-4-20250514")
+
+    if st.button("✨ Refine Draft with Claude", type="secondary", disabled=not refinement_feedback):
+        with st.status("🧠 Agent 5: Refinement in progress...", expanded=True) as status:
+            st.session_state.current_workflow_status = "Refining Content..."
+            
+            # Use the currently displayed post data for refinement
+            current_post_data = {
+                # Fetching values from Streamlit's session state based on the keys used below
+                'title': st.session_state.get('final_title', post.get('title')),
+                'excerpt': st.session_state.get('final_excerpt', post.get('excerpt')),
+                'meta_title': st.session_state.get('final_meta_title', post.get('meta_title')),
+                'meta_description': st.session_state.get('final_meta_desc', post.get('meta_description')),
+                'html_content': st.session_state.get('final_content', post.get('html_content'))
+            }
+            
+            refined_post = agent_refiner(current_post_data, refinement_feedback, claude_model_select)
+            
+            if refined_post:
+                st.session_state['elite_blog_v8'] = refined_post # Overwrite the session state with new draft
+                st.session_state.current_workflow_status = "Refinement Complete."
+                status.update(label="Draft Refined!", state="complete")
+                # Force a re-run to refresh the text areas with the new content
+                st.rerun() 
+            else:
+                status.update(label="Refinement Failed", state="error")
+                st.error("Refinement failed. Check the logs for details.")
+    
+    st.divider()
+    # --- END Refinement Section ---
+
     # TABS FOR VIEWING
     tab_blog, tab_social = st.tabs(["📝 Blog Post", "📱 Social Media Pack"])
 
@@ -537,17 +743,25 @@ if 'elite_blog_v8' in st.session_state:
         with col2:
             final_img = st.text_input("Feature Image URL", value=img_url or "", help="Paste your own image URL here, or use the generated one.")
 
-        title = st.text_input("Title", value=post.get('title', ''))
+        # Text inputs are now refreshed with refined content if needed
+        title = st.text_input("Title", value=post.get('title', ''), key='final_title')
         with st.expander("SEO Metadata"):
-            meta_title = st.text_input("Meta Title", value=post.get('meta_title', ''))
-            meta_desc = st.text_input("Meta Description", value=post.get('meta_description', ''))
+            meta_title = st.text_input("Meta Title", value=post.get('meta_title', ''), key='final_meta_title')
+            meta_desc = st.text_input("Meta Description", value=post.get('meta_description', ''), key='final_meta_desc')
             
-        excerpt = st.text_input("Excerpt", value=post.get('excerpt', ''))
-        content = st.text_area("HTML Content", value=post.get('html_content', ''), height=500)
+        excerpt = st.text_input("Excerpt", value=post.get('excerpt', ''), key='final_excerpt')
+        content = st.text_area("HTML Content", value=post.get('html_content', ''), height=500, key='final_content')
 
         if st.button("🚀 Upload Draft to Ghost"):
             with st.spinner("Uploading..."):
-                post.update({'title': title, 'excerpt': excerpt, 'meta_title': meta_title, 'meta_description': meta_desc, 'html_content': content})
+                # Use the keys from the UI inputs for the final post
+                post.update({
+                    'title': st.session_state['final_title'], 
+                    'excerpt': st.session_state['final_excerpt'], 
+                    'meta_title': st.session_state['final_meta_title'], 
+                    'meta_description': st.session_state['final_meta_desc'], 
+                    'html_content': st.session_state['final_content']
+                })
                 tags = ["Elite AI"]
                 if uploaded_file: tags.append("Context Aware")
                 result = publish_to_ghost(post, final_img, tags)
