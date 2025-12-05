@@ -1,14 +1,3 @@
-That makes the fix much cleaner\! If we assume **"claude-sonnet-4-20250514"** is a valid and accessible model, we need to update the default value in the function definitions and make sure the new model name is available in the user interface.
-
-Here is the updated code, focusing on three main areas:
-
-1.  **Sidebar:** Update the `claude_model_select` options to include the new model.
-2.  **Function Definitions:** Change the default model string in `agent_writer` and `agent_social_media`.
-3.  **Function Logic:** Use a local variable to ensure the model argument is always respected.
-
-## ✍️ Updated Python Code
-
-````python
 import streamlit as st
 import requests
 import jwt # pip install pyjwt
@@ -94,6 +83,7 @@ def transcribe_audio(file):
     if not openai_client_is_valid:
         return "Audio transcription skipped: OpenAI client not initialized."
     try:
+        # Note: file must be a file-like object with a name attribute, or a temp file wrapper
         transcript = openai_client.audio.transcriptions.create(
             model="whisper-1",
             file=file
@@ -167,7 +157,7 @@ def agent_research(topic, transcript_context=None):
         st.error(f"Research Agent Failed: {e}")
         return None
 
-# --- UPDATE 1: Set New Model as Default ---
+# --- UPDATED: Default model is now "claude-sonnet-4-20250514" ---
 def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, transcript_text=None, claude_model="claude-sonnet-4-20250514"):
     """AGENT 2: THE WRITER (Claude)"""
     # Use a local variable to ensure the model argument is respected
@@ -234,7 +224,7 @@ def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, tr
 
     try:
         message = writer.messages.create(
-            model=final_claude_model, # Use the new model name
+            model=final_claude_model, # Using the selected model
             max_tokens=8000,
             temperature=temperature,
             messages=[{"role": "user", "content": prompt}]
@@ -252,13 +242,13 @@ def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, tr
         st.error(f"Writer Agent Failed: {e}")
         return None
 
-# --- UPDATE 2: Set New Model as Default ---
+# --- UPDATED: Default model is now "claude-sonnet-4-20250514" ---
 def agent_social_media(blog_content, claude_model="claude-sonnet-4-20250514"):
     """AGENT 3: THE SOCIAL MEDIA MANAGER (Claude)"""
     # Use a local variable to ensure the model argument is respected
     final_claude_model = claude_model
     add_log(f"Agent 3 (Claude) drafting social posts using model: {final_claude_model}")
-
+    
     prompt = f"""
     You are a expert social media manager. Based on this blog post content, generate:
     1. A LinkedIn Post (professional, engaging, bullet points).
@@ -273,7 +263,7 @@ def agent_social_media(blog_content, claude_model="claude-sonnet-4-20250514"):
     """
     try:
         message = writer.messages.create(
-            model=final_claude_model, # Use the new model name
+            model=final_claude_model, # Using the selected model
             max_tokens=2000,
             temperature=0.7,
             messages=[{"role": "user", "content": prompt}]
@@ -401,12 +391,11 @@ with st.sidebar:
 
     st.divider()
     st.subheader("🛠️ Debugging/Model Select")
-    
-    # --- UPDATE 3: Add new model to select box ---
+    # --- UPDATED: New model added and set as default index ---
     claude_model_select = st.selectbox(
         "Claude Model (Select if getting 404 errors):",
         options=["claude-sonnet-4-20250514", "claude-3-5-sonnet", "claude-3-opus", "claude-3-sonnet"],
-        index=0, # Set the new model as the default selection
+        index=0,
         help="The error means your key cannot access the model. Try switching to a different model if the default fails."
     )
 
@@ -496,9 +485,11 @@ if st.button("Start Elite Workflow", type="primary", use_container_width=True):
             # 2. WRITING
             st.session_state.current_workflow_status = "Drafting Content (Claude)..."
             status.update(label=f"✍️ Agent 2: Claude is writing ({tone_setting} tone)...", state="running")
+            # --- Pass the user-selected model ---
             blog_post = agent_writer(topic, research_data, style_sample, tone_setting, keywords, transcript_text, claude_model_select)
             if blog_post:
                 st.session_state['elite_blog_v8'] = blog_post
+                # Placeholder cost for Claude 3.5 Sonnet (~$0.003/k token, estimating $0.05 per long post)
                 est_cost += 0.05
             else:
                 status.update(label="Writing Failed", state="error")
@@ -507,6 +498,7 @@ if st.button("Start Elite Workflow", type="primary", use_container_width=True):
             # 3. SOCIAL MEDIA
             st.session_state.current_workflow_status = "Generating Social Media Assets..."
             status.update(label="📱 Agent 3: Drafting Socials...", state="running")
+            # --- Pass the user-selected model ---
             socials = agent_social_media(blog_post['html_content'], claude_model_select)
             st.session_state['elite_socials'] = socials
             
@@ -515,6 +507,7 @@ if st.button("Start Elite Workflow", type="primary", use_container_width=True):
             status.update(label="🎨 Agent 4: DALL-E is painting...", state="running")
             image_url = agent_artist(topic)
             if image_url:
+                # Placeholder cost for DALL-E 3
                 est_cost += 0.04
             
             st.session_state['elite_image_v8'] = image_url
@@ -586,4 +579,3 @@ if 'elite_blog_v8' in st.session_state:
         rd_text = socials.get('reddit', '')
         st.text_area("Reddit Draft", value=rd_text, height=100)
         st.link_button("Post to Reddit", generate_social_links(rd_text, "reddit"))
-````
