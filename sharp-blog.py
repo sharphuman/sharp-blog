@@ -1,8 +1,3 @@
-I understand the canvas is having issues, so here is the complete code for **Elite Blog Agent V8 (Three-Agent System)**, which restores the full DALL-E/Whisper functionality while maintaining the advanced Claude/Perplexity workflow.
-
-You can copy this directly into your `sharp-blog.py` file.
-
-````python
 import streamlit as st
 import requests
 import jwt # pip install pyjwt
@@ -13,7 +8,7 @@ import urllib.parse
 from anthropic import Anthropic
 from pypdf import PdfReader # pip install pypdf
 from docx import Document # pip install python-docx
-from openai import OpenAI # RESTORED: OpenAI client for DALL-E/Whisper
+from openai import OpenAI 
 
 # --- CONFIGURATION & SECRETS ---
 st.set_page_config(page_title="Elite AI Blog Agent V8 (3-Agent System)", page_icon="🎩", layout="wide")
@@ -27,7 +22,7 @@ try:
     # AI Credentials
     PPLX_API_KEY = st.secrets.get("PERPLEXITY_API_KEY") or st.secrets["PERPLEXITY_API_KEY"]
     ANTHROPIC_API_KEY = st.secrets.get("ANTHROPIC_API_KEY") or st.secrets["ANTHROPIC_API_KEY"]
-    OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY") or st.secrets["OPENAI_API_KEY"] # RESTORED
+    OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY") or st.secrets["OPENAI_API_KEY"]
     
 except Exception as e:
     # Fallback for when secrets are environment variables
@@ -53,10 +48,7 @@ try:
 except Exception:
     openai_client = None
     openai_client_is_valid = False
-    # Display warning in sidebar if key is invalid
-    # st.sidebar.warning("OpenAI Key failed initialization. DALL-E/Whisper will be skipped.")
-
-
+    
 # --- HELPER FUNCTIONS ---
 
 def extract_text_from_pdf(file):
@@ -298,7 +290,7 @@ st.markdown("""
 <div style="border: 1px solid #ddd; padding: 20px; border-radius: 10px; margin-bottom: 25px;">
     <h4>🚀 The World's Most Advanced AI Editorial Team</h4>
     <ul>
-        <li>🗣️ <b>Multi-Format Context:</b> Upload files (PDF, Doc, **Audio/Video**). We transcribe and read everything.</li>
+        <li>🗣️ <b>Multi-Format Context:</b> Upload files (PDF, Doc, <b>Audio/Video</b>). We transcribe and read everything.</li>
         <li>🔍 <b>Research & Validation:</b> Perplexity performs deep research AND <b>fact-checks claims</b>.</li>
         <li>✍️ <b>Style & SEO:</b> Claude mimics your voice AND targets your keywords.</li>
         <li>🎨 <b>Instant Visuals:</b> DALL-E 3 automatically generates a high-quality cover image.</li>
