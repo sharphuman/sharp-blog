@@ -1,7 +1,8 @@
 streamlit
-requests
-pyjwt
 openai
 anthropic
+requests
+pyjwt
 pypdf
 python-docx
+textstat
