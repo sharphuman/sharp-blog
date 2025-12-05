@@ -1,3 +1,14 @@
+That makes the fix much cleaner\! If we assume **"claude-sonnet-4-20250514"** is a valid and accessible model, we need to update the default value in the function definitions and make sure the new model name is available in the user interface.
+
+Here is the updated code, focusing on three main areas:
+
+1.  **Sidebar:** Update the `claude_model_select` options to include the new model.
+2.  **Function Definitions:** Change the default model string in `agent_writer` and `agent_social_media`.
+3.  **Function Logic:** Use a local variable to ensure the model argument is always respected.
+
+## ✍️ Updated Python Code
+
+````python
 import streamlit as st
 import requests
 import jwt # pip install pyjwt
@@ -8,7 +19,7 @@ import urllib.parse
 from anthropic import Anthropic
 from pypdf import PdfReader
 from docx import Document
-from openai import OpenAI 
+from openai import OpenAI
 
 # --- CONFIGURATION & SECRETS ---
 st.set_page_config(page_title="Elite AI Blog Agent V8 (3-Agent System)", page_icon="🎩", layout="wide")
@@ -84,7 +95,7 @@ def transcribe_audio(file):
         return "Audio transcription skipped: OpenAI client not initialized."
     try:
         transcript = openai_client.audio.transcriptions.create(
-            model="whisper-1", 
+            model="whisper-1",
             file=file
         )
         return transcript.text
@@ -143,7 +154,7 @@ def agent_research(topic, transcript_context=None):
     
     try:
         response = researcher.chat.completions.create(
-            model="sonar-pro", 
+            model="sonar-pro",
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": f"Research this topic deeply: {topic}"}
@@ -156,9 +167,12 @@ def agent_research(topic, transcript_context=None):
         st.error(f"Research Agent Failed: {e}")
         return None
 
-def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, transcript_text=None, claude_model="claude-3-5-sonnet"):
+# --- UPDATE 1: Set New Model as Default ---
+def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, transcript_text=None, claude_model="claude-sonnet-4-20250514"):
     """AGENT 2: THE WRITER (Claude)"""
-    add_log(f"Agent 2 (Claude) starting content drafting using model: {claude_model}")
+    # Use a local variable to ensure the model argument is respected
+    final_claude_model = claude_model
+    add_log(f"Agent 2 (Claude) starting content drafting using model: {final_claude_model}")
     
     tone_map = {
         "Technical": (0.2, "Focus on technical accuracy, use industry jargon appropriate for experts, be precise and dense."),
@@ -220,7 +234,7 @@ def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, tr
 
     try:
         message = writer.messages.create(
-            model=claude_model,
+            model=final_claude_model, # Use the new model name
             max_tokens=8000,
             temperature=temperature,
             messages=[{"role": "user", "content": prompt}]
@@ -238,9 +252,13 @@ def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, tr
         st.error(f"Writer Agent Failed: {e}")
         return None
 
-def agent_social_media(blog_content, claude_model="claude-3-5-sonnet"):
+# --- UPDATE 2: Set New Model as Default ---
+def agent_social_media(blog_content, claude_model="claude-sonnet-4-20250514"):
     """AGENT 3: THE SOCIAL MEDIA MANAGER (Claude)"""
-    add_log("Agent 3 (Claude) drafting social posts...")
+    # Use a local variable to ensure the model argument is respected
+    final_claude_model = claude_model
+    add_log(f"Agent 3 (Claude) drafting social posts using model: {final_claude_model}")
+
     prompt = f"""
     You are a expert social media manager. Based on this blog post content, generate:
     1. A LinkedIn Post (professional, engaging, bullet points).
@@ -255,7 +273,7 @@ def agent_social_media(blog_content, claude_model="claude-3-5-sonnet"):
     """
     try:
         message = writer.messages.create(
-            model=claude_model,
+            model=final_claude_model, # Use the new model name
             max_tokens=2000,
             temperature=0.7,
             messages=[{"role": "user", "content": prompt}]
@@ -313,7 +331,7 @@ def publish_to_ghost(data, image_url, tags):
             "html": data['html_content'],
             "feature_image": image_url,
             "status": "draft",
-            "tags": [{"name": t} for t in tags] 
+            "tags": [{"name": t} for t in tags]
         }]
     }
     
@@ -383,12 +401,13 @@ with st.sidebar:
 
     st.divider()
     st.subheader("🛠️ Debugging/Model Select")
-    # Updated Model Selector options
+    
+    # --- UPDATE 3: Add new model to select box ---
     claude_model_select = st.selectbox(
         "Claude Model (Select if getting 404 errors):",
-        options=["claude-3-5-sonnet", "claude-3-opus", "claude-3-sonnet"],
-        index=0, 
-        help="The error means your key cannot access the model. Try switching to 'claude-3-opus' if the default fails."
+        options=["claude-sonnet-4-20250514", "claude-3-5-sonnet", "claude-3-opus", "claude-3-sonnet"],
+        index=0, # Set the new model as the default selection
+        help="The error means your key cannot access the model. Try switching to a different model if the default fails."
     )
 
 # MAIN INPUT AREA
@@ -400,8 +419,8 @@ with col_input:
     # STEP 2: SEO KEYWORDS (With Suggestion Button)
     col_seo_btn, col_seo_txt = st.columns([1, 2])
     with col_seo_btn:
-        st.write("") 
-        st.write("") 
+        st.write("")
+        st.write("")
         if st.button("✨ Suggest Keywords", help="Ask Perplexity for high-impact keywords"):
             if not topic:
                 st.toast("Please enter a topic first!", icon="⚠️")
@@ -414,7 +433,7 @@ with col_input:
     
     with col_seo_txt:
         keywords = st.text_input(
-            "Target SEO Keywords (Optional)", 
+            "Target SEO Keywords (Optional)",
             value=st.session_state.get('seo_keywords', ''),
             placeholder="e.g. database sharding, sql vs nosql",
             help="Edit these or add your own."
@@ -453,7 +472,7 @@ if st.button("Start Elite Workflow", type="primary", use_container_width=True):
                         add_log("Starting audio transcription via Whisper...")
                         transcript_text = transcribe_audio(uploaded_file)
                         if "Error" not in transcript_text:
-                            est_cost += 0.01 
+                            est_cost += 0.01
                     
                     if transcript_text and "Error" not in transcript_text: st.write(f"✅ Context Loaded.")
                     else: st.error(f"File processing error: {transcript_text}")
@@ -469,7 +488,7 @@ if st.button("Start Elite Workflow", type="primary", use_container_width=True):
             research_data = agent_research(topic, transcript_context=bool(transcript_text))
             if research_data:
                 st.write("✅ Facts verified.")
-                est_cost += 0.01 
+                est_cost += 0.01
             else:
                 status.update(label="Research Failed", state="error")
                 st.stop()
@@ -480,7 +499,7 @@ if st.button("Start Elite Workflow", type="primary", use_container_width=True):
             blog_post = agent_writer(topic, research_data, style_sample, tone_setting, keywords, transcript_text, claude_model_select)
             if blog_post:
                 st.session_state['elite_blog_v8'] = blog_post
-                est_cost += 0.05 
+                est_cost += 0.05
             else:
                 status.update(label="Writing Failed", state="error")
                 st.stop()
@@ -496,7 +515,7 @@ if st.button("Start Elite Workflow", type="primary", use_container_width=True):
             status.update(label="🎨 Agent 4: DALL-E is painting...", state="running")
             image_url = agent_artist(topic)
             if image_url:
-                est_cost += 0.04 
+                est_cost += 0.04
             
             st.session_state['elite_image_v8'] = image_url
             st.session_state['est_cost'] = est_cost
@@ -529,7 +548,7 @@ if 'elite_blog_v8' in st.session_state:
         with st.expander("SEO Metadata"):
             meta_title = st.text_input("Meta Title", value=post.get('meta_title', ''))
             meta_desc = st.text_input("Meta Description", value=post.get('meta_description', ''))
-        
+            
         excerpt = st.text_input("Excerpt", value=post.get('excerpt', ''))
         content = st.text_area("HTML Content", value=post.get('html_content', ''), height=500)
 
@@ -538,7 +557,7 @@ if 'elite_blog_v8' in st.session_state:
                 post.update({'title': title, 'excerpt': excerpt, 'meta_title': meta_title, 'meta_description': meta_desc, 'html_content': content})
                 tags = ["Elite AI"]
                 if uploaded_file: tags.append("Context Aware")
-                result = publish_to_ghost(post, final_img, tags) 
+                result = publish_to_ghost(post, final_img, tags)
                 if result.status_code in [200, 201]:
                     st.balloons()
                     st.success("Success! Draft created.")
@@ -567,3 +586,4 @@ if 'elite_blog_v8' in st.session_state:
         rd_text = socials.get('reddit', '')
         st.text_area("Reddit Draft", value=rd_text, height=100)
         st.link_button("Post to Reddit", generate_social_links(rd_text, "reddit"))
+````
