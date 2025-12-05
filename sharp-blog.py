@@ -10,10 +10,16 @@ from pypdf import PdfReader
 from docx import Document
 from openai import OpenAI
 import os
-import textstat  # pip install textstat
+
+# --- SAFE IMPORT FOR TEXTSTAT ---
+try:
+    import textstat
+    textstat_installed = True
+except ImportError:
+    textstat_installed = False
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Elite AI Blog Agent V10.1", page_icon="🎩", layout="wide")
+st.set_page_config(page_title="Elite AI Blog Agent V10.3", page_icon="🎩", layout="wide")
 
 # --- CSS: CORPORATE STYLING ---
 st.markdown("""
@@ -31,11 +37,14 @@ st.markdown("""
 if 'log_events' not in st.session_state: st.session_state.log_events = []
 if 'current_workflow_status' not in st.session_state: st.session_state.current_workflow_status = "Ready."
 if 'claude_model_selection' not in st.session_state: st.session_state.claude_model_selection = "claude-sonnet-4-20250514"
+# --- FIX: MISSING INIT ADDED BELOW ---
+if 'last_claude_model' not in st.session_state: st.session_state.last_claude_model = "None (Awaiting Run)"
 if 'elite_blog_v8' not in st.session_state: st.session_state.elite_blog_v8 = None
 if 'transcript_context' not in st.session_state: st.session_state.transcript_context = False
 if 'final_title' not in st.session_state: st.session_state.final_title = ""
 if 'final_content' not in st.session_state: st.session_state.final_content = ""
 if 'final_excerpt' not in st.session_state: st.session_state.final_excerpt = ""
+if 'seo_keywords' not in st.session_state: st.session_state.seo_keywords = ""
 
 # --- SECRETS ---
 try:
@@ -56,6 +65,7 @@ def set_status(user_msg):
     st.session_state.current_workflow_status = user_msg
 
 # --- CLIENTS ---
+# Re-initializing clients every run ensures stability against timeouts
 researcher = OpenAI(api_key=PPLX_API_KEY, base_url="https://api.perplexity.ai")
 writer = Anthropic(api_key=ANTHROPIC_API_KEY)
 try:
@@ -98,18 +108,21 @@ def generate_social_link(text, platform):
         return f"https://www.reddit.com/submit?selftext=true&title=New%20Post&text={safe}"
     return "#"
 
-# --- AGENTS (WITH PERFORMANCE CACHING) ---
+# --- AGENTS ---
 
-@st.cache_data(show_spinner=False)
 def agent_seo(topic):
-    # Cached: If you run same topic, it returns instantly.
+    # REMOVED CACHE to ensure retries work if it failed before
+    add_log("SEO Agent: Starting...")
     try:
         res = researcher.chat.completions.create(
-            model="sonar-pro",
-            messages=[{"role": "user", "content": f"Suggest 5-7 high-impact SEO keywords for: {topic}. Comma separated."}]
+            model="sonar", # Switched to standard 'sonar' for reliability
+            messages=[{"role": "user", "content": f"Suggest 5-7 high-impact SEO keywords for: {topic}. Comma separated. List only."}]
         )
+        add_log("SEO Agent: Success.")
         return res.choices[0].message.content
-    except: return ""
+    except Exception as e:
+        add_log(f"SEO Agent Failed: {e}") # Now you will see WHY it failed
+        return ""
 
 @st.cache_data(show_spinner=False)
 def agent_research(topic, context):
@@ -148,9 +161,8 @@ def agent_writer(topic, research, style, tone, keywords, audience, context_txt, 
     CONTEXT: {context_txt[:30000] if context_txt else "None"}
 
     *** PRIVACY & ANONYMITY PROTOCOL (CRITICAL) ***
-    - If the CONTEXT contains specific names of people (e.g., 'John Smith said...', 'Sarah from marketing'), YOU MUST ANONYMIZE THEM.
+    - If the CONTEXT contains specific names of people, YOU MUST ANONYMIZE THEM.
     - Convert specific anecdotes into GENERAL MARKET OBSERVATIONS.
-    - Example: Change "Bob complained about slow load times" to "Users frequently report frustration with slow load times."
     - DO NOT use any real names from the transcript.
 
     RULES:
@@ -192,21 +204,14 @@ def agent_socials(content, model):
             messages=[{"role": "user", "content": prompt}]
         )
         txt = msg.content[0].text
-        
-        # --- ROBUST JSON CLEANER ---
         cleaned_txt = txt.strip()
-        if "```json" in cleaned_txt:
-            cleaned_txt = cleaned_txt.split("```json")[1].split("```")[0]
-        elif "```" in cleaned_txt:
-            cleaned_txt = cleaned_txt.split("```")[1].split("```")[0]
+        if "```json" in cleaned_txt: cleaned_txt = cleaned_txt.split("```json")[1].split("```")[0]
+        elif "```" in cleaned_txt: cleaned_txt = cleaned_txt.split("```")[1].split("```")[0]
         
-        cleaned_txt = cleaned_txt.strip()
-        # ---------------------------
-        
-        return json.loads(cleaned_txt)
+        return json.loads(cleaned_txt.strip())
     except Exception as e:
         add_log(f"Socials JSON Error: {e}")
-        return {"linkedin": f"Error generating content: {e}", "twitter_thread": [], "reddit": ""}
+        return {"linkedin": f"Error: {e}", "twitter_thread": [], "reddit": ""}
 
 def agent_artist(topic, tone, audience, custom_prompt=None):
     add_log("Agent 4 (DALL-E): Generating Art...")
@@ -217,7 +222,6 @@ def agent_artist(topic, tone, audience, custom_prompt=None):
     else:
         base_prompt = f"A visualization of {topic}"
 
-    # V10 UPGRADE: "ANTI-WEIRD" PROMPTING
     visual_style = "Award-winning editorial photography, shot on Leica M11, 50mm lens, soft natural lighting, realistic textures, shallow depth of field."
     
     if "Teenager" in audience or "Child" in audience:
@@ -269,10 +273,9 @@ def upload_ghost(data, img_url, tags):
             up_res = requests.post(f"{GHOST_API_URL}/ghost/api/admin/images/upload/", headers={'Authorization': f'Ghost {token}'}, files=files)
             if up_res.status_code == 201: final_img = up_res.json()['images'][0]['url']
 
-        # SAFEGUARD: Ghost API hard limit is 300 chars. We truncate to 297 + ...
+        # Ghost Safety Truncation
         safe_excerpt = data['excerpt']
-        if len(safe_excerpt) > 300:
-            safe_excerpt = safe_excerpt[:297] + "..."
+        if len(safe_excerpt) > 300: safe_excerpt = safe_excerpt[:297] + "..."
 
         body = {
             "posts": [{
@@ -294,28 +297,28 @@ def upload_ghost(data, img_url, tags):
 
 # --- LAYOUT CONSTRUCTION ---
 
-st.title("🎩 Elite AI Blog Agent V10.1")
+st.title("🎩 Elite AI Blog Agent V10.3")
 st.markdown("Research by **Perplexity** | Writing by **Claude** | Art by **DALL-E**")
 
 # MAIN COLUMNS
 left_col, right_col = st.columns([2, 1])
 
-# --- RIGHT COLUMN (LOGS & STATUS) - TOP PRIORITY ---
+# --- RIGHT COLUMN (LOGS & STATUS) ---
 with right_col:
-    # 1. Live Logs
     st.markdown("### 📜 Live Logs")
     st.text_area("", value="\n".join(st.session_state.log_events), height=250, disabled=True, key="logs_display")
     
-    # 2. High Level Status
     st.markdown("### 🟢 User Status")
     st.info(st.session_state.current_workflow_status)
     
-    # 3. Technical Status
     with st.expander("🛠️ Technical / Low Level Status", expanded=True):
         st.write(f"**Writer:** {st.session_state.last_claude_model}")
-        st.write("**Research:** Perplexity Sonar (Cached)")
+        st.write("**Research:** Perplexity Sonar")
         st.write("**Art:** DALL-E 3 (Anti-Weird Mode)")
-        st.write("**Privacy:** Anonymization Active")
+        if textstat_installed:
+            st.write("**Readability:** TextStat Active")
+        else:
+            st.write("**Readability:** Disabled (Missing textstat)")
 
 # --- LEFT COLUMN (INPUTS) ---
 with left_col:
@@ -360,6 +363,9 @@ with left_col:
             add_log("Workflow Initialized.")
             set_status("Reading Context Files...")
             
+            # --- FIX: UPDATE THE LAST USED MODEL ---
+            st.session_state.last_claude_model = st.session_state.claude_model_selection
+            
             st.session_state.transcript_context = False
             transcript_txt = None
             
@@ -375,7 +381,7 @@ with left_col:
                         st.session_state.transcript_context = True
                         add_log("Context Successfully Loaded.")
             
-            # --- AGENT 1: RESEARCH (CACHED) ---
+            # --- AGENT 1: RESEARCH ---
             set_status("Agent 1: Researching Topic...")
             add_log("Calling Perplexity...")
             research_data = agent_research(topic, st.session_state.transcript_context)
@@ -443,10 +449,10 @@ if st.session_state.elite_blog_v8:
             st.markdown("---")
             st.markdown(current_content, unsafe_allow_html=True)
             
-            # --- NEW FEATURE: READABILITY SCORE ---
-            score = textstat.flesch_kincaid_grade(current_content)
-            score_color = "red" if score > 12 else "orange" if score > 10 else "green"
-            st.caption(f"Readability Grade Level: :{score_color}[{score}] (Aim for 8-10 for general public)")
+            if textstat_installed:
+                score = textstat.flesch_kincaid_grade(current_content)
+                score_color = "red" if score > 12 else "orange" if score > 10 else "green"
+                st.caption(f"Readability Grade Level: :{score_color}[{score}] (Aim for 8-10)")
 
             if st.button("🔄 Refresh Preview", help="Click to update preview after manual edits"):
                 st.rerun()
