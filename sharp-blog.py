@@ -19,17 +19,51 @@ except ImportError:
     textstat_installed = False
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Elite AI Blog Agent V10.3", page_icon="🎩", layout="wide")
+st.set_page_config(page_title="Elite AI Blog Agent V11", page_icon="🎩", layout="wide")
 
-# --- CSS: CORPORATE STYLING ---
+# --- CSS: CORPORATE STYLING & LAYOUT HACKS ---
 st.markdown("""
 <style>
-    .stTextArea textarea { font-size: 15px !important; font-family: 'Helvetica Neue', sans-serif; }
-    .stSelectbox div[data-baseweb="select"] > div { font-size: 15px !important; }
-    .stButton button { width: 100%; border-radius: 4px; font-weight: 600; }
-    div[data-testid="stExpander"] { border: 1px solid #e0e0e0; border-radius: 4px; }
-    h1, h2, h3 { font-family: 'Helvetica Neue', sans-serif; letter-spacing: -0.5px; }
-    .reportview-container .main .block-container { max-width: 1200px; padding-top: 2rem; }
+    /* 1. Global Typography */
+    .stTextArea textarea, .stSelectbox div, .stButton button, p, h1, h2, h3 {
+        font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif !important;
+    }
+    
+    /* 2. Text Area & Input Styling */
+    .stTextArea textarea {
+        font-size: 15px !important;
+        line-height: 1.5 !important;
+    }
+    
+    /* 3. File Uploader HACK: Make it tall and square */
+    div[data-testid="stFileUploader"] section {
+        min-height: 200px !important; /* Twice the normal height */
+        padding-top: 60px !important; /* Center the icon */
+        border: 2px dashed #cccccc;
+        background-color: #f9f9f9;
+        border-radius: 10px;
+    }
+    div[data-testid="stFileUploader"] section:hover {
+        border-color: #FF4B4B; /* Streamlit Red on hover */
+    }
+
+    /* 4. Expander Styling */
+    div[data-testid="stExpander"] {
+        border: 1px solid #e0e0e0;
+        border-radius: 6px;
+        background-color: white;
+    }
+    
+    /* 5. Button Styling */
+    .stButton button {
+        width: 100%;
+        border-radius: 6px;
+        font-weight: 600;
+        height: 3rem;
+    }
+    
+    /* 6. Header Spacing */
+    h3 { padding-top: 0px !important; margin-top: 0px !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -37,7 +71,6 @@ st.markdown("""
 if 'log_events' not in st.session_state: st.session_state.log_events = []
 if 'current_workflow_status' not in st.session_state: st.session_state.current_workflow_status = "Ready."
 if 'claude_model_selection' not in st.session_state: st.session_state.claude_model_selection = "claude-sonnet-4-20250514"
-# --- FIX: MISSING INIT ADDED BELOW ---
 if 'last_claude_model' not in st.session_state: st.session_state.last_claude_model = "None (Awaiting Run)"
 if 'elite_blog_v8' not in st.session_state: st.session_state.elite_blog_v8 = None
 if 'transcript_context' not in st.session_state: st.session_state.transcript_context = False
@@ -65,7 +98,6 @@ def set_status(user_msg):
     st.session_state.current_workflow_status = user_msg
 
 # --- CLIENTS ---
-# Re-initializing clients every run ensures stability against timeouts
 researcher = OpenAI(api_key=PPLX_API_KEY, base_url="https://api.perplexity.ai")
 writer = Anthropic(api_key=ANTHROPIC_API_KEY)
 try:
@@ -111,17 +143,16 @@ def generate_social_link(text, platform):
 # --- AGENTS ---
 
 def agent_seo(topic):
-    # REMOVED CACHE to ensure retries work if it failed before
     add_log("SEO Agent: Starting...")
     try:
         res = researcher.chat.completions.create(
-            model="sonar", # Switched to standard 'sonar' for reliability
+            model="sonar", 
             messages=[{"role": "user", "content": f"Suggest 5-7 high-impact SEO keywords for: {topic}. Comma separated. List only."}]
         )
         add_log("SEO Agent: Success.")
         return res.choices[0].message.content
     except Exception as e:
-        add_log(f"SEO Agent Failed: {e}") # Now you will see WHY it failed
+        add_log(f"SEO Agent Failed: {e}")
         return ""
 
 @st.cache_data(show_spinner=False)
@@ -140,14 +171,14 @@ def agent_writer(topic, research, style, tone, keywords, audience, context_txt, 
     add_log(f"Agent 2 (Claude): Writing ({tone})...")
     
     aud_map = {
-        "Grand Parent": "Simple metaphors, respectful, clear, large concepts.",
-        "Teenager": "Fast-paced, authentic, minimal slang, focus on identity.",
-        "Child": "Simple words, short sentences, exciting analogies.",
-        "CEO": "ROI-focused, strategic, concise (BLUF).",
-        "Hobbyist": "Passionate, detailed, practical tips.",
-        "Developer": "Technical depth, code concepts.",
-        "Executive": "Strategic impact, business outcomes.",
-        "General Public": "Accessible, clear, relatable."
+        "Grand Parent": "Simple metaphors, respectful, clear, large concepts. Avoid slang.",
+        "Teenager": "Fast-paced, authentic, minimal slang, focus on identity and social proof.",
+        "Child": "Simple words, short sentences, exciting analogies, educational but fun.",
+        "CEO": "ROI-focused, strategic, concise (BLUF). No fluff.",
+        "Hobbyist": "Passionate, detailed, practical tips, community-focused.",
+        "Developer": "Technical depth, code concepts, implementation details.",
+        "Executive": "Strategic impact, business outcomes, high-level summary.",
+        "General Public": "Accessible, clear, relatable, no jargon."
     }
     aud_inst = aud_map.get(audience, "Professional and clear.")
 
@@ -160,16 +191,17 @@ def agent_writer(topic, research, style, tone, keywords, audience, context_txt, 
     RESEARCH: {research}
     CONTEXT: {context_txt[:30000] if context_txt else "None"}
 
-    *** PRIVACY & ANONYMITY PROTOCOL (CRITICAL) ***
-    - If the CONTEXT contains specific names of people, YOU MUST ANONYMIZE THEM.
-    - Convert specific anecdotes into GENERAL MARKET OBSERVATIONS.
-    - DO NOT use any real names from the transcript.
+    *** PRIVACY & ANONYMITY PROTOCOL (MANDATORY) ***
+    - The CONTEXT contains a raw interview/transcript.
+    - **NEVER use specific personal names** from the transcript (e.g. "John mentioned...").
+    - **ALWAYS generalize** anecdotes into market trends (e.g. "It is common for users to report...").
+    - Treat the transcript as "Market Data", not "Quotes".
 
     RULES:
     1. NO EMOJIS in body text.
-    2. NO EM-DASHES (—). Use hyphens (-).
+    2. NO EM-DASHES (—). Use hyphens (-) or commas.
     3. No inline links. List "Sources" at the end.
-    4. Human-like flow. Short paragraphs.
+    4. Human-like flow. Vary sentence length.
     5. **EXCERPT must be concise (< 280 chars).**
     
     OUTPUT: JSON with keys: title, meta_title, meta_description, excerpt, html_content.
@@ -194,8 +226,7 @@ def agent_socials(content, model):
     2. Twitter/X: A THREAD of 3-5 tweets. Tweet 1: Hook. Last Tweet: CTA.
     3. Reddit: Engaging Title + Body.
     
-    IMPORTANT: Return ONLY valid JSON. No markdown formatting outside the JSON block.
-    
+    IMPORTANT: Return ONLY valid JSON.
     OUTPUT: JSON with keys: "linkedin", "twitter_thread" (Array of strings), "reddit".
     """
     try:
@@ -297,24 +328,27 @@ def upload_ghost(data, img_url, tags):
 
 # --- LAYOUT CONSTRUCTION ---
 
-st.title("🎩 Elite AI Blog Agent V10.3")
+st.title("🎩 Elite AI Blog Agent V11.0")
 st.markdown("Research by **Perplexity** | Writing by **Claude** | Art by **DALL-E**")
 
 # MAIN COLUMNS
 left_col, right_col = st.columns([2, 1])
 
-# --- RIGHT COLUMN (LOGS & STATUS) ---
+# --- RIGHT COLUMN (LOGS & STATUS) - TOP PRIORITY ---
 with right_col:
+    # 1. Live Logs
     st.markdown("### 📜 Live Logs")
     st.text_area("", value="\n".join(st.session_state.log_events), height=250, disabled=True, key="logs_display")
     
+    # 2. High Level Status
     st.markdown("### 🟢 User Status")
     st.info(st.session_state.current_workflow_status)
     
+    # 3. Technical Status
     with st.expander("🛠️ Technical / Low Level Status", expanded=True):
         st.write(f"**Writer:** {st.session_state.last_claude_model}")
         st.write("**Research:** Perplexity Sonar")
-        st.write("**Art:** DALL-E 3 (Anti-Weird Mode)")
+        st.write("**Art:** DALL-E 3 (Editorial Mode)")
         if textstat_installed:
             st.write("**Readability:** TextStat Active")
         else:
@@ -324,6 +358,7 @@ with right_col:
 with left_col:
     st.markdown("### 📝 Strategy")
     
+    # Row 1: Tone & Audience
     c1, c2 = st.columns(2)
     with c1:
         tone_setting = st.selectbox("Tone & Voice", ["Conversational", "Technical", "Professional", "Witty", "Storyteller", "Journalistic"])
@@ -333,14 +368,18 @@ with left_col:
             "Grand Parent", "Teenager", "Child", "Hobbyist", "CEO"
         ])
     
+    # Row 2: Writing Style (Full Width, Scrollable)
     style_sample = st.text_area("Writing Style / Voice Mimicry", height=100, placeholder="Paste text here to match its rhythm and vocabulary...")
 
+    # Row 3: File Uploader (Taller via CSS)
     st.markdown("##### 📎 Context (Audio/PDF/Doc)")
-    uploaded_file = st.file_uploader("", type=['txt','pdf','docx','mp3','mp4'])
+    uploaded_file = st.file_uploader("", type=['txt','pdf','docx','mp3','mp4'], label_visibility="collapsed")
 
+    # Row 4: Topic
     st.markdown("##### 💡 Main Topic")
     topic = st.text_area("Enter your detailed prompt here...", height=150, placeholder="e.g. A comprehensive guide on...")
     
+    # Row 5: Keywords
     st.markdown("##### 🔑 SEO Keywords")
     ck1, ck2 = st.columns([1, 4])
     with ck1:
@@ -349,10 +388,10 @@ with left_col:
         if st.button("✨ Suggest"):
             if topic:
                 with st.spinner("Thinking..."):
-                    st.session_state['seo_keywords'] = agent_seo(topic)
+                    st.session_state.seo_keywords = agent_seo(topic)
     with ck2:
-        keywords = st.text_area("", value=st.session_state.get('seo_keywords', ''), height=68, label_visibility="collapsed")
-        st.session_state['seo_keywords'] = keywords
+        keywords = st.text_area("", value=st.session_state.seo_keywords, height=68, label_visibility="collapsed")
+        st.session_state.seo_keywords = keywords
 
     st.write("")
     if st.button("🚀 Start Elite Workflow", type="primary", use_container_width=True):
@@ -363,7 +402,7 @@ with left_col:
             add_log("Workflow Initialized.")
             set_status("Reading Context Files...")
             
-            # --- FIX: UPDATE THE LAST USED MODEL ---
+            # Update Model Tracker
             st.session_state.last_claude_model = st.session_state.claude_model_selection
             
             st.session_state.transcript_context = False
