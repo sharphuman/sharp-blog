@@ -21,7 +21,7 @@ except ImportError:
     textstat_installed = False
 
 # --- CONFIGURATION & NEON THEME ---
-st.set_page_config(page_title="Elite AI Blog Agent V13.1", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="Elite AI Blog Agent V13.3", page_icon="🧠", layout="wide")
 
 st.markdown("""
 <style>
@@ -67,6 +67,7 @@ if 'final_content' not in st.session_state: st.session_state.final_content = ""
 if 'final_excerpt' not in st.session_state: st.session_state.final_excerpt = ""
 if 'seo_keywords' not in st.session_state: st.session_state.seo_keywords = ""
 if 'last_claude_model' not in st.session_state: st.session_state.last_claude_model = "claude-sonnet-4-20250514"
+if 'claude_model_selection' not in st.session_state: st.session_state.claude_model_selection = "claude-sonnet-4-20250514"
 
 # --- SECRETS ---
 try:
@@ -150,10 +151,17 @@ def agent_research(topic, context):
         return res.choices[0].message.content
     except: return None
 
+def clean_json_response(txt):
+    """Robust JSON cleaner for AI responses"""
+    txt = txt.strip()
+    if "```json" in txt: 
+        txt = txt.split("```json")[1].split("```")[0]
+    elif "```" in txt: 
+        txt = txt.split("```")[1].split("```")[0]
+    return txt.strip()
+
 def agent_writer(topic, research, style, tone, keywords, audience, context_txt, model):
     add_log(f"Agent 2: Writing...")
-    
-    # 🧠 THE UPGRADED BRAIN 🧠
     prompt = f"""
     You are a world-class Ghostwriter and Editor. You are writing a blog post.
     
@@ -189,14 +197,13 @@ def agent_writer(topic, research, style, tone, keywords, audience, context_txt, 
     **OUTPUT FORMAT:**
     Return ONLY a valid JSON object with keys: "title", "meta_title", "meta_description", "excerpt", "html_content".
     """
-    
     try:
         msg = writer.messages.create(model=model, max_tokens=8000, temperature=0.7, messages=[{"role": "user", "content": prompt}])
         track_cost("Anthropic", 0.03)
-        txt = msg.content[0].text
-        if "```json" in txt: txt = txt.split("```json")[1].split("```")[0]
-        return json.loads(txt)
-    except: return None
+        return json.loads(clean_json_response(msg.content[0].text))
+    except Exception as e:
+        add_log(f"Writer Error: {e}")
+        return None
 
 def agent_socials(blog_html, model):
     add_log("Agent 3: Creating Socials...")
@@ -215,9 +222,7 @@ def agent_socials(blog_html, model):
     try:
         msg = writer.messages.create(model=model, max_tokens=2000, temperature=0.7, messages=[{"role": "user", "content": prompt}])
         track_cost("Anthropic", 0.01)
-        txt = msg.content[0].text
-        if "```json" in txt: txt = txt.split("```json")[1].split("```")[0]
-        return json.loads(txt.strip())
+        return json.loads(clean_json_response(msg.content[0].text))
     except: return {"linkedin": "", "twitter_thread": [], "reddit": ""}
 
 def agent_artist(topic, tone, audience, custom_prompt=None):
@@ -248,9 +253,7 @@ def agent_refine(data, feedback, model):
     try:
         msg = writer.messages.create(model=model, max_tokens=8000, temperature=0.4, messages=[{"role": "user", "content": prompt}])
         track_cost("Anthropic", 0.02)
-        txt = msg.content[0].text
-        if "```json" in txt: txt = txt.split("```json")[1].split("```")[0]
-        return json.loads(txt)
+        return json.loads(clean_json_response(msg.content[0].text))
     except: return None
 
 def upload_ghost(data, img_url, tags):
@@ -283,7 +286,7 @@ def upload_ghost(data, img_url, tags):
 
 # --- UI LAYOUT ---
 
-st.title("🧠 Elite AI Blog Agent V13.1")
+st.title("🧠 Elite AI Blog Agent V13.3")
 st.markdown("Research by **Perplexity** | Writing by **Claude** | Art by **DALL-E**")
 
 img_prompt = st.text_input("🎨 Custom Image Description (Optional)", placeholder="Describe the image... (Leave empty for auto-gen)")
@@ -328,9 +331,10 @@ s1, s2 = st.columns(2)
 with s1:
     st.info(f"**Status:** {st.session_state.current_workflow_status}")
 with s2:
-    with st.expander("💰 Costs & Specs", expanded=False):
+    with st.expander("💰 Costs & Settings", expanded=False):
         st.write(st.session_state.costs)
-        st.write(f"Writer: {st.session_state.last_claude_model}")
+        # Restore the model selector inside the expander
+        st.selectbox("Model:", ["claude-sonnet-4-20250514", "claude-3-5-sonnet", "claude-3-opus"], key="claude_model_selection")
 
 # START BUTTON
 if st.button("🚀 Start Elite Workflow", type="primary", use_container_width=True):
@@ -340,7 +344,10 @@ if st.button("🚀 Start Elite Workflow", type="primary", use_container_width=Tr
         st.session_state.log_events = [] 
         add_log("Workflow Initialized.")
         st.session_state.current_workflow_status = "Processing Context..."
+        
+        # Safe Model State Update
         st.session_state.last_claude_model = st.session_state.claude_model_selection
+        
         st.session_state.transcript_context = False
         transcript_txt = None
         
@@ -356,7 +363,7 @@ if st.button("🚀 Start Elite Workflow", type="primary", use_container_width=Tr
         
         if research_data:
             st.session_state.current_workflow_status = "Drafting..."
-            blog = agent_writer(topic, research_data, style_sample, tone_setting, keywords, audience_setting, transcript_txt, "claude-sonnet-4-20250514")
+            blog = agent_writer(topic, research_data, style_sample, tone_setting, keywords, audience_setting, transcript_txt, st.session_state.claude_model_selection)
             
             if blog:
                 st.session_state.elite_blog_v8 = blog
@@ -365,7 +372,7 @@ if st.button("🚀 Start Elite Workflow", type="primary", use_container_width=Tr
                 st.session_state.final_excerpt = blog['excerpt']
                 
                 st.session_state.current_workflow_status = "Socials & Art..."
-                st.session_state.elite_socials = agent_socials(blog['html_content'], "claude-sonnet-4-20250514")
+                st.session_state.elite_socials = agent_socials(blog['html_content'], st.session_state.claude_model_selection)
                 img = agent_artist(topic, tone_setting, audience_setting, custom_prompt=img_prompt)
                 if img: st.session_state.elite_image_v8 = img
                 
@@ -378,11 +385,9 @@ if st.session_state.elite_blog_v8:
     t1, t2 = st.tabs(["📝 Review & Refine", "📱 Social Media"])
     
     with t1:
-        # WHITE PREVIEW FIX
         st.subheader("👁️ Preview")
         if st.session_state.get('elite_image_v8'): st.image(st.session_state.elite_image_v8, use_container_width=True)
         
-        # HTML Component for safe rendering (White on Black app)
         html_preview = f"""
         <div style="background-color: white; color: black; padding: 40px; border-radius: 10px; font-family: sans-serif;">
             <h1 style="color: black;">{st.session_state.final_title}</h1>
@@ -407,7 +412,7 @@ if st.session_state.elite_blog_v8:
                         'meta_title': st.session_state.elite_blog_v8.get('meta_title'),
                         'meta_description': st.session_state.elite_blog_v8.get('meta_description')
                     }
-                    new_post = agent_refine(curr, refine_inst, "claude-sonnet-4-20250514")
+                    new_post = agent_refine(curr, refine_inst, st.session_state.claude_model_selection)
                     if new_post:
                         st.session_state.final_title = new_post['title']
                         st.session_state.final_content = new_post['html_content']
