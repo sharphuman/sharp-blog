@@ -19,7 +19,7 @@ if 'log_events' not in st.session_state:
     st.session_state.log_events = ["System Initialized. Ready for input."]
 if 'current_workflow_status' not in st.session_state:
     st.session_state.current_workflow_status = "Awaiting Topic."
-# Initialize a safe key for the Claude model selection
+# Initialize safe keys
 if 'claude_model_selection' not in st.session_state:
     st.session_state.claude_model_selection = "claude-sonnet-4-20250514"
 if 'last_claude_model' not in st.session_state:
@@ -567,9 +567,11 @@ with st.sidebar:
         key='claude_model_selection', # <-- Stored in session_state
         help="The error means your key cannot access the model. Try switching to a different model if the default fails."
     )
+# (End of with st.sidebar: block)
 
-# --- FIX: Safely retrieve the model selection from session state ---
-claude_model_select = st.session_state['claude_model_selection']
+# --- FIX: Safely retrieve the model selection from session state to solve NameError ---
+# This ensures claude_model_select is always defined in the main script scope.
+claude_model_select = st.session_state.get('claude_model_selection', "claude-sonnet-4-20250514")
 
 
 # MAIN INPUT AREA
@@ -630,24 +632,33 @@ if st.button("Start Elite Workflow", type="primary", use_container_width=True):
             file_type = uploaded_file.name.split('.')[-1].lower()
             add_log(f"File detected: {uploaded_file.name}. Type: {file_type}")
             
-            with st.status(f"📂 Reading Context: {file_type.upper()}...", expanded=True) as status:
-                try:
-                    if file_type in ['pdf']: transcript_text = extract_text_from_pdf(uploaded_file)
-                    elif file_type in ['docx']: transcript_text = extract_text_from_docx(uploaded_file)
-                    elif file_type in ['txt', 'md']: transcript_text = uploaded_file.read().decode("utf-8")
-                    elif file_type in ['mp3', 'mp4', 'm4a', 'mpeg', 'wav']:
-                        add_log("Starting audio transcription via Whisper...")
-                        transcript_text = transcribe_audio(uploaded_file)
-                        if "Error" not in transcript_text:
-                            est_cost += 0.01
-                        
-                    if transcript_text and "Error" not in transcript_text: st.write(f"✅ Context Loaded.")
-                    else: st.error(f"File processing error: {transcript_text}")
-                except Exception as e:
-                    add_log(f"FATAL File processing error: {e}")
-                    status.update(label="Context Processing Failed", state="error")
-                    st.stop()
-                status.update(label="Context Ready!", state="complete", expanded=False)
+            # --- FIX: Add file size check for audio before processing ---
+            if file_type in ['mp3', 'mp4', 'm4a', 'mpeg', 'wav']:
+                # Whisper limit is 25MB (26,214,400 bytes)
+                if uploaded_file.size > 26000000:
+                    st.error("Audio file is too large (>25MB). Please compress the audio or use a smaller file.")
+                    uploaded_file = None # Prevent the file from being processed
+            # --- END FIX ---
+            
+            if uploaded_file: # Only proceed if the file passed the size check or wasn't audio
+                with st.status(f"📂 Reading Context: {file_type.upper()}...", expanded=True) as status:
+                    try:
+                        if file_type in ['pdf']: transcript_text = extract_text_from_pdf(uploaded_file)
+                        elif file_type in ['docx']: transcript_text = extract_text_from_docx(uploaded_file)
+                        elif file_type in ['txt', 'md']: transcript_text = uploaded_file.read().decode("utf-8")
+                        elif file_type in ['mp3', 'mp4', 'm4a', 'mpeg', 'wav']:
+                            add_log("Starting audio transcription via Whisper...")
+                            transcript_text = transcribe_audio(uploaded_file)
+                            if "Error" not in transcript_text:
+                                est_cost += 0.01
+                            
+                        if transcript_text and "Error" not in transcript_text: st.write(f"✅ Context Loaded.")
+                        else: st.error(f"File processing error: {transcript_text}")
+                    except Exception as e:
+                        add_log(f"FATAL File processing error: {e}")
+                        status.update(label="Context Processing Failed", state="error")
+                        st.stop()
+                    status.update(label="Context Ready!", state="complete", expanded=False)
 
         # 1. RESEARCH
         st.session_state.current_workflow_status = "Researching and Validating Facts..."
@@ -664,6 +675,7 @@ if st.button("Start Elite Workflow", type="primary", use_container_width=True):
             st.session_state.current_workflow_status = "Drafting Content (Claude)..."
             status.update(label=f"✍️ Agent 2: Claude is writing ({tone_setting} tone, for {audience_setting})...", state="running")
             # --- Pass audience_setting to the writer agent ---
+            # claude_model_select is now guaranteed to be defined (NameError fixed)
             blog_post = agent_writer(topic, research_data, style_sample, tone_setting, keywords, audience_setting, transcript_context, transcript_text, claude_model_select)
             if blog_post:
                 st.session_state['elite_blog_v8'] = blog_post
@@ -723,7 +735,7 @@ if st.session_state['elite_blog_v8']:
     )
     
     # Use the selected Claude model from the session state
-    claude_model_select = st.session_state.get('last_claude_model', "claude-sonnet-4-20250514")
+    claude_model_select_refine = st.session_state.get('last_claude_model', "claude-sonnet-4-20250514")
 
     if st.button("✨ Refine Draft with Claude", type="secondary", disabled=not refinement_feedback):
         with st.status("🧠 Agent 5: Refinement in progress...", expanded=True) as status:
@@ -738,7 +750,7 @@ if st.session_state['elite_blog_v8']:
                 'html_content': st.session_state.get('final_content', post.get('html_content'))
             }
             
-            refined_post = agent_refiner(current_post_data, refinement_feedback, claude_model_select)
+            refined_post = agent_refiner(current_post_data, refinement_feedback, claude_model_select_refine)
             
             if refined_post:
                 st.session_state['elite_blog_v8'] = refined_post # Overwrite the session state with new draft
@@ -786,7 +798,7 @@ if st.session_state['elite_blog_v8']:
                 }
                 
                 tags = ["Elite AI"]
-                if uploaded_file: tags.append("Context Aware")
+                if st.session_state.get('uploaded_file'): tags.append("Context Aware")
                 result = publish_to_ghost(final_post_data, st.session_state['final_img_url'], tags)
                 if result.status_code in [200, 201]:
                     st.balloons()
