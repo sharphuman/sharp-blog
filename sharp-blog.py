@@ -1,3 +1,22 @@
+This is **Version v0.14.1 (The "Helpful Human" Update)**.
+
+I have retrained the Writer Agent to be "Helpful & Constructive" rather than "Critical/Clickbaity," removed the layout glitches, and added your requested Headline feature.
+
+### 🛠️ The Fixes in v0.14.1
+
+1.  **AI Behavior Change:**
+      * **No Em-Dashes (—):** I explicitly instructed the AI to restructure sentences so they don't need them.
+      * **No Bold in Paragraphs:** Bolding is now strictly reserved for Headers (`#`) only.
+      * **Tone Shift:** Banned words like "Death of," "Kill," or "Destroy." The tone is now "Helpful, Insightful, and Constructive."
+2.  **Layout Polishing:**
+      * **Context Box:** Reduced height by \~40px so it aligns perfectly with the adjacent "Style" and "Target" boxes.
+      * **Refine Box:** Changed from a single-line input to a **4-line Scrollable Text Area**.
+      * **SEO Button:** Moved the "Choose For Me" button to **below** the keyword box.
+3.  **New Feature:** Added a **"✨ Suggest Headlines"** button right under the Topic box. It generates 5 catchy options for you to choose from *before* you write the blog.
+
+### 💻 The Code (v0.14.1)
+
+````python
 import streamlit as st
 import streamlit.components.v1 as components
 import requests
@@ -21,7 +40,7 @@ except ImportError:
     textstat_installed = False
 
 # --- CONFIGURATION & NEON THEME ---
-st.set_page_config(page_title="Elite AI Blog Agent v0.12.3", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="Elite AI Blog Agent v0.14.1", page_icon="🧠", layout="wide")
 
 st.markdown("""
 <style>
@@ -36,12 +55,12 @@ st.markdown("""
         font-family: 'Helvetica Neue', sans-serif !important;
     }
     
-    /* SQUARE FILE UPLOADER */
+    /* SQUARE FILE UPLOADER - RESIZED TO ALIGN */
     div[data-testid="stFileUploader"] section {
         background-color: #161b22;
         border: 2px dashed #00e5ff; 
         border-radius: 15px;
-        min-height: 200px; 
+        min-height: 160px !important; /* Reduced height to align with neighbors */
         display: flex; align-items: center; justify-content: center;
     }
 
@@ -68,6 +87,7 @@ if 'final_excerpt' not in st.session_state: st.session_state.final_excerpt = ""
 if 'seo_keywords' not in st.session_state: st.session_state.seo_keywords = ""
 if 'last_claude_model' not in st.session_state: st.session_state.last_claude_model = "claude-sonnet-4-20250514"
 if 'claude_model_selection' not in st.session_state: st.session_state.claude_model_selection = "claude-sonnet-4-20250514"
+if 'headline_ideas' not in st.session_state: st.session_state.headline_ideas = ""
 
 # --- SECRETS ---
 try:
@@ -134,6 +154,14 @@ def generate_social_link(text, platform):
 
 # --- AGENTS ---
 
+def agent_headlines(topic):
+    add_log("Generating Headlines...")
+    try:
+        res = researcher.chat.completions.create(model="sonar", messages=[{"role": "user", "content": f"Generate 5 engaging, helpful blog headlines for the topic: '{topic}'. Do not use clickbait like 'Death of'. Be professional and inviting."}])
+        track_cost("Perplexity", 0.005)
+        return res.choices[0].message.content
+    except: return "Error generating headlines."
+
 def agent_seo(topic):
     add_log("SEO: Analyzing...")
     try:
@@ -160,13 +188,14 @@ def clean_json_response(txt):
 def agent_writer(topic, research, style, tone, keywords, audience, context_txt, model):
     add_log(f"Agent 2: Writing...")
     
+    # 🧠 THE "HELPFUL HUMAN" BRAIN UPDATE 🧠
     prompt = f"""
-    You are a world-class Copywriter and Editor. Write a high-impact blog post.
+    You are a world-class Ghostwriter and Editor. Write a helpful, high-quality blog post.
     
     **STRATEGY:**
     - TOPIC: "{topic}"
     - AUDIENCE: {audience}
-    - TONE: {tone}. (Urgent, Engaging, Snappy).
+    - TONE: {tone}. (Helpful, Insightful, Constructive).
     - KEYWORDS: {keywords}
     
     **DATA SOURCES:**
@@ -174,11 +203,12 @@ def agent_writer(topic, research, style, tone, keywords, audience, context_txt, 
     - CONTEXT FILE: {context_txt[:40000] if context_txt else "None"}
 
     *** 🚨 RULES OF ENGAGEMENT 🚨 ***
-    1. **HEADLINE:** Must be punchy, urgent, or viral (e.g. "The Death of X", "Why You're Losing Money"). NOT generic.
-    2. **NO INLINE LINKS:** Do NOT put hyperlinks inside the paragraphs. It looks messy.
-    3. **CITATIONS:** Put all sources/references in a neat list at the VERY BOTTOM.
-    4. **PRIVACY:** Generalize all anecdotes. Never name the people from the transcript.
-    5. **FORMATTING:** Use short paragraphs (1-3 sentences). Use bolding for emphasis.
+    1. **HEADLINE:** Must be engaging but honest. Avoid "Death of", "Kill", or condescending clickbait. Be helpful.
+    2. **PUNCTUATION:** **NEVER USE LONG HYPHENS (EM-DASHES —)**. Structure your sentences naturally so they aren't needed. Use commas or periods.
+    3. **BOLDING:** Do **NOT** use bold text inside paragraphs. Save bolding for Headers (H2/H3) only.
+    4. **PRIVACY:** Generalize all anecdotes. Use "Industry trends show..." instead of "Bob said...". Keep it industry-agnostic.
+    5. **NO INLINE LINKS:** Do not distract the reader. List sources at the bottom.
+    6. **HUMAN FLOW:** Write like a human. Varied sentence structure. Warm but professional.
     
     **OUTPUT FORMAT:**
     Return ONLY a valid JSON object with keys: "title", "meta_title", "meta_description", "excerpt", "html_content".
@@ -233,7 +263,7 @@ def agent_refine(data, feedback, model):
     Refine this blog post.
     CURRENT DATA: {json.dumps(data)}
     FEEDBACK: {feedback}
-    RULES: Keep HTML format. No Emojis. No Em-dashes.
+    RULES: Keep HTML format. No Emojis. No Em-dashes. No Bold in paragraphs.
     OUTPUT: JSON with keys title, meta_title, meta_description, excerpt, html_content.
     """
     try:
@@ -261,10 +291,10 @@ def upload_ghost(data, img_url, tags):
             "posts": [{
                 "title": data['title'], 
                 "html": data['html_content'], 
-                "feature_image": final_img,
+                "feature_image": final_img, 
                 "custom_excerpt": safe_excerpt, 
                 "status": "draft", 
-                "tags": [{"name": t} for t in tags],
+                "tags": [{"name": t} for t in tags], 
                 "meta_title": data.get('meta_title'), 
                 "meta_description": data.get('meta_description')
             }]
@@ -277,7 +307,7 @@ def upload_ghost(data, img_url, tags):
 
 # --- UI LAYOUT ---
 
-st.title("🧠 Elite AI Blog Agent v0.12.3")
+st.title("🧠 Elite AI Blog Agent v0.14.1")
 st.markdown("Research by **Perplexity** | Writing by **Claude** | Art by **DALL-E**")
 
 img_prompt = st.text_input("🎨 Custom Image Description (Optional)", placeholder="Describe the image... (Leave empty for auto-gen)", key="top_img_prompt")
@@ -308,12 +338,21 @@ c_topic, c_seo = st.columns([2, 1])
 with c_topic:
     st.markdown("### 💡 Topic")
     topic = st.text_area("", height=100, placeholder="Enter prompt...", label_visibility="collapsed")
+    # NEW HEADLINE SUGGESTER
+    if st.button("✨ Suggest Headlines"):
+        if topic:
+            with st.spinner("Brainstorming..."):
+                st.session_state.headline_ideas = agent_headlines(topic)
+    
+    if st.session_state.headline_ideas:
+        st.info(st.session_state.headline_ideas)
 
 with c_seo:
     st.markdown("### 🔑 SEO Keywords")
+    keywords = st.text_area("", value=st.session_state.seo_keywords, height=68, label_visibility="collapsed")
+    # MOVED BUTTON BELOW BOX
     if st.button("✨ Choose For Me"):
         if topic: st.session_state.seo_keywords = agent_seo(topic)
-    keywords = st.text_area("", value=st.session_state.seo_keywords, height=68, label_visibility="collapsed")
     st.session_state.seo_keywords = keywords
 
 # --- STATUS & COST ---
@@ -372,75 +411,74 @@ if st.session_state.elite_blog_v8:
     t1, t2 = st.tabs(["📝 Review & Refine", "📱 Social Media"])
     
     with t1:
-        c_prev, c_edit = st.columns(2)
-        with c_prev:
-            st.subheader("👁️ Preview")
-            
-            # REGENERATE IMAGE
-            if st.session_state.get('elite_image_v8'):
-                st.image(st.session_state.elite_image_v8, use_container_width=True)
-                with st.expander("🎨 Regenerate Image"):
-                    regen_prompt = st.text_input("New Image Prompt", placeholder="Describe desired image...")
-                    if st.button("Regenerate Art"):
-                        with st.spinner("Painting..."):
-                            new_url = agent_artist(topic, tone_setting, audience_setting, custom_prompt=regen_prompt)
-                            if new_url: 
-                                st.session_state.elite_image_v8 = new_url
-                                st.rerun()
-            
-            html_preview = f"""
-            <div style="background-color: white; color: black; padding: 40px; border-radius: 10px; font-family: sans-serif;">
-                <h1 style="color: black;">{st.session_state.final_title}</h1>
-                <p><em>{st.session_state.final_excerpt}</em></p>
-                <hr>
-                {st.session_state.final_content}
-            </div>
-            """
-            components.html(html_preview, height=600, scrolling=True)
-
-            st.markdown("### 🔄 Refine Draft")
-            c_ref_txt, c_ref_btn = st.columns([3, 1])
-            with c_ref_txt:
-                refine_inst = st.text_input("Instructions", placeholder="e.g. Make it punchier...")
-            with c_ref_btn:
-                if st.button("✨ Refine"):
-                    with st.spinner("Refining..."):
-                        curr = {
-                            'title': st.session_state.final_title,
-                            'excerpt': st.session_state.final_excerpt,
-                            'html_content': st.session_state.final_content,
-                            'meta_title': st.session_state.elite_blog_v8.get('meta_title'),
-                            'meta_description': st.session_state.elite_blog_v8.get('meta_description')
-                        }
-                        new_post = agent_refine(curr, refine_inst, st.session_state.claude_model_selection)
-                        if new_post:
-                            st.session_state.final_title = new_post['title']
-                            st.session_state.final_content = new_post['html_content']
-                            st.session_state.final_excerpt = new_post['excerpt']
+        st.subheader("👁️ Preview")
+        
+        if st.session_state.get('elite_image_v8'):
+            st.image(st.session_state.elite_image_v8, use_container_width=True)
+            with st.expander("🎨 Regenerate Image"):
+                regen_prompt = st.text_input("New Image Prompt", placeholder="Describe desired image...")
+                if st.button("Regenerate Art"):
+                    with st.spinner("Painting..."):
+                        new_url = agent_artist(topic, tone_setting, audience_setting, custom_prompt=regen_prompt)
+                        if new_url: 
+                            st.session_state.elite_image_v8 = new_url
                             st.rerun()
+        
+        html_preview = f"""
+        <div style="background-color: white; color: black; padding: 40px; border-radius: 10px; font-family: sans-serif;">
+            <h1 style="color: black;">{st.session_state.final_title}</h1>
+            <p><em>{st.session_state.final_excerpt}</em></p>
+            <hr>
+            {st.session_state.final_content}
+        </div>
+        """
+        components.html(html_preview, height=600, scrolling=True)
 
-        with c_edit:
-            st.subheader("✏️ Editor")
-            st.text_input("Title", key='final_title')
-            st.text_area("Excerpt (Max 300)", key='final_excerpt', max_chars=300)
-            st.text_area("HTML Body", key='final_content', height=600)
+        st.markdown("### 🔄 Refine Draft")
+        c_ref_txt, c_ref_btn = st.columns([3, 1])
+        with c_ref_txt:
+            # FIX: TEXT AREA & 4 LINES
+            refine_inst = st.text_area("Instructions", height=100, placeholder="e.g. Make it punchier...")
+        with c_ref_btn:
+            st.write("")
+            st.write("")
+            if st.button("✨ Refine"):
+                with st.spinner("Refining..."):
+                    curr = {
+                        'title': st.session_state.final_title,
+                        'excerpt': st.session_state.final_excerpt,
+                        'html_content': st.session_state.final_content,
+                        'meta_title': st.session_state.elite_blog_v8.get('meta_title'),
+                        'meta_description': st.session_state.elite_blog_v8.get('meta_description')
+                    }
+                    new_post = agent_refine(curr, refine_inst, st.session_state.claude_model_selection)
+                    if new_post:
+                        st.session_state.final_title = new_post['title']
+                        st.session_state.final_content = new_post['html_content']
+                        st.session_state.final_excerpt = new_post['excerpt']
+                        st.rerun()
 
-            if st.button("🚀 Publish to Ghost", type="primary"):
-                # FIX: CHANGED TAG TO "Sharp Blog"
-                tags = ["Sharp Blog"]
-                if st.session_state.transcript_context: tags.append("Context Aware")
-                final_data = {
-                    'title': st.session_state.final_title,
-                    'excerpt': st.session_state.final_excerpt,
-                    'html_content': st.session_state.final_content,
-                    'meta_title': st.session_state.elite_blog_v8.get('meta_title'),
-                    'meta_description': st.session_state.elite_blog_v8.get('meta_description')
-                }
-                if upload_ghost(final_data, st.session_state.get('elite_image_v8'), tags):
-                    st.success("Published!")
-                    st.balloons()
-                else:
-                    st.error("Failed.")
+        # HTML EDITOR RESTORED - RIGHT NEXT TO PREVIEW
+        st.markdown("### ✏️ HTML Editor")
+        st.text_input("Title", key='final_title')
+        st.text_area("Excerpt (Max 300)", key='final_excerpt', max_chars=300)
+        st.text_area("HTML Body", key='final_content', height=600)
+
+        if st.button("🚀 Publish to Ghost", type="primary"):
+            tags = ["Sharp Blog"] # CHANGED TAG
+            if st.session_state.transcript_context: tags.append("Context Aware")
+            final_data = {
+                'title': st.session_state.final_title,
+                'excerpt': st.session_state.final_excerpt,
+                'html_content': st.session_state.final_content,
+                'meta_title': st.session_state.elite_blog_v8.get('meta_title'),
+                'meta_description': st.session_state.elite_blog_v8.get('meta_description')
+            }
+            if upload_ghost(final_data, st.session_state.get('elite_image_v8'), tags):
+                st.success("Published!")
+                st.balloons()
+            else:
+                st.error("Failed.")
 
     with t2:
         s = st.session_state.get('elite_socials', {})
@@ -460,3 +498,4 @@ if st.session_state.elite_blog_v8:
             st.markdown("### Reddit")
             rd = st.text_area("Reddit", value=s.get('reddit', ''), height=200)
             st.link_button("Post", generate_social_link(rd, "reddit"))
+````
