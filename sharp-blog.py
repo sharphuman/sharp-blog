@@ -1,3 +1,17 @@
+I understand. I apologize that the canvas is being difficult. The syntax error you are seeing:
+
+`````
+File "/app/sharp-blog.py", line 489
+  ````
+  ^
+SyntaxError: invalid syntax
+`````
+
+... is because an extra set of **markdown code fences** (` ```` `) somehow made it into the code when I pasted it. I will ensure the code is clean.
+
+Here is the complete, clean Python code for **Elite Blog Agent V8 (Three-Agent System)**, ready to be pasted into your `sharp-blog.py` file.
+
+````python
 import streamlit as st
 import requests
 import jwt # pip install pyjwt
