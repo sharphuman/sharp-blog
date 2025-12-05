@@ -21,7 +21,7 @@ except ImportError:
     textstat_installed = False
 
 # --- CONFIGURATION & NEON THEME ---
-st.set_page_config(page_title="Elite AI Blog Agent v0.14.1", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="Elite AI Blog Agent v0.14.2", page_icon="🧠", layout="wide")
 
 st.markdown("""
 <style>
@@ -36,12 +36,12 @@ st.markdown("""
         font-family: 'Helvetica Neue', sans-serif !important;
     }
     
-    /* SQUARE FILE UPLOADER - RESIZED TO ALIGN */
+    /* SQUARE FILE UPLOADER */
     div[data-testid="stFileUploader"] section {
         background-color: #161b22;
         border: 2px dashed #00e5ff; 
         border-radius: 15px;
-        min-height: 160px !important; /* Reduced height to align with neighbors */
+        min-height: 160px !important; 
         display: flex; align-items: center; justify-content: center;
     }
 
@@ -50,6 +50,22 @@ st.markdown("""
         background: -webkit-linear-gradient(45deg, #00e5ff, #d500f9);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
+    }
+    
+    /* NEON GREEN START BUTTON */
+    div[data-testid="stButton"] button {
+        background: #39ff14 !important; /* Neon Green */
+        color: #000000 !important;      /* Black Text */
+        border: none !important;
+        font-weight: 800 !important;
+        font-size: 1.2rem !important;
+        text-transform: uppercase;
+        transition: all 0.3s ease;
+    }
+    div[data-testid="stButton"] button:hover {
+        box-shadow: 0 0 15px #39ff14;
+        transform: scale(1.02);
+        color: #000000 !important;
     }
     
     .stAlert { background-color: #1c1c1c; border: 1px solid #333; color: #00e5ff; }
@@ -68,7 +84,6 @@ if 'final_excerpt' not in st.session_state: st.session_state.final_excerpt = ""
 if 'seo_keywords' not in st.session_state: st.session_state.seo_keywords = ""
 if 'last_claude_model' not in st.session_state: st.session_state.last_claude_model = "claude-sonnet-4-20250514"
 if 'claude_model_selection' not in st.session_state: st.session_state.claude_model_selection = "claude-sonnet-4-20250514"
-if 'headline_ideas' not in st.session_state: st.session_state.headline_ideas = ""
 
 # --- SECRETS ---
 try:
@@ -135,14 +150,6 @@ def generate_social_link(text, platform):
 
 # --- AGENTS ---
 
-def agent_headlines(topic):
-    add_log("Generating Headlines...")
-    try:
-        res = researcher.chat.completions.create(model="sonar", messages=[{"role": "user", "content": f"Generate 5 engaging, helpful blog headlines for the topic: '{topic}'. Do not use clickbait like 'Death of'. Be professional and inviting."}])
-        track_cost("Perplexity", 0.005)
-        return res.choices[0].message.content
-    except: return "Error generating headlines."
-
 def agent_seo(topic):
     add_log("SEO: Analyzing...")
     try:
@@ -166,17 +173,22 @@ def clean_json_response(txt):
     elif "```" in txt: txt = txt.split("```")[1].split("```")[0]
     return txt.strip()
 
-def agent_writer(topic, research, style, tone, keywords, audience, context_txt, model):
+def agent_writer(topic, headline_hint, research, style, tone, keywords, audience, context_txt, model):
     add_log(f"Agent 2: Writing...")
     
-    # 🧠 THE "HELPFUL HUMAN" BRAIN UPDATE 🧠
+    headline_inst = ""
+    if headline_hint:
+        headline_inst = f"MANDATORY HEADLINE: You MUST use this exact headline or a close variation: '{headline_hint}'"
+
+    # 🧠 THE "HELPFUL HUMAN" BRAIN 🧠
     prompt = f"""
     You are a world-class Ghostwriter and Editor. Write a helpful, high-quality blog post.
     
     **STRATEGY:**
     - TOPIC: "{topic}"
+    - {headline_inst}
     - AUDIENCE: {audience}
-    - TONE: {tone}. (Helpful, Insightful, Constructive).
+    - TONE: {tone}
     - KEYWORDS: {keywords}
     
     **DATA SOURCES:**
@@ -184,12 +196,11 @@ def agent_writer(topic, research, style, tone, keywords, audience, context_txt, 
     - CONTEXT FILE: {context_txt[:40000] if context_txt else "None"}
 
     *** 🚨 RULES OF ENGAGEMENT 🚨 ***
-    1. **HEADLINE:** Must be engaging but honest. Avoid "Death of", "Kill", or condescending clickbait. Be helpful.
-    2. **PUNCTUATION:** **NEVER USE LONG HYPHENS (EM-DASHES —)**. Structure your sentences naturally so they aren't needed. Use commas or periods.
-    3. **BOLDING:** Do **NOT** use bold text inside paragraphs. Save bolding for Headers (H2/H3) only.
-    4. **PRIVACY:** Generalize all anecdotes. Use "Industry trends show..." instead of "Bob said...". Keep it industry-agnostic.
-    5. **NO INLINE LINKS:** Do not distract the reader. List sources at the bottom.
-    6. **HUMAN FLOW:** Write like a human. Varied sentence structure. Warm but professional.
+    1. **PUNCTUATION:** **NEVER USE LONG HYPHENS (EM-DASHES —)**. Structure your sentences naturally so they aren't needed. Use commas or periods.
+    2. **BOLDING:** Do **NOT** use bold text inside paragraphs. Save bolding for Headers (H2/H3) only.
+    3. **PRIVACY:** Generalize all anecdotes. Use "Industry trends show..." instead of "Bob said...". Keep it industry-agnostic.
+    4. **NO INLINE LINKS:** Do not distract the reader. List sources at the bottom.
+    5. **HUMAN FLOW:** Write like a human. Varied sentence structure. Warm but professional.
     
     **OUTPUT FORMAT:**
     Return ONLY a valid JSON object with keys: "title", "meta_title", "meta_description", "excerpt", "html_content".
@@ -288,10 +299,8 @@ def upload_ghost(data, img_url, tags):
 
 # --- UI LAYOUT ---
 
-st.title("🧠 Elite AI Blog Agent v0.14.1")
+st.title("🧠 Elite AI Blog Agent v0.14.2")
 st.markdown("Research by **Perplexity** | Writing by **Claude** | Art by **DALL-E**")
-
-img_prompt = st.text_input("🎨 Custom Image Description (Optional)", placeholder="Describe the image... (Leave empty for auto-gen)", key="top_img_prompt")
 
 # --- 3-COLUMN LAYOUT ---
 col1, col2, col3 = st.columns([1, 1, 1])
@@ -301,40 +310,63 @@ with col1:
     style_sample = st.text_area("Voice Mimicry", height=200, placeholder="Paste text here...")
 
 with col2:
+    # SPACING HACK TO MOVE DOWN 2 LINES
+    st.write("")
+    st.write("")
     st.markdown("### 📎 Context")
     uploaded_file = st.file_uploader("", type=['txt','pdf','docx','mp3','mp4'], label_visibility="collapsed")
 
 with col3:
     st.markdown("### 🎯 Target")
-    tone_setting = st.selectbox("Tone", ["Conversational", "Technical", "Professional", "Witty", "Storyteller", "Journalistic"])
-    audience_setting = st.selectbox("Audience", ["General Public", "Developer", "Executive", "Recruiter", "Grand Parent", "Teenager", "Child", "Hobbyist", "CEO"])
+    
+    # DESCRIPTIVE OPTIONS
+    tone_options = [
+        "Conversational (Friendly, relatable, uses contractions)",
+        "Technical (Precise, industry jargon, dense)",
+        "Professional (Corporate, authoritative, accessible)",
+        "Witty (Clever, light humor, entertaining)",
+        "Storyteller (Narrative arc, emotive, scene-setting)",
+        "Journalistic (Objective, fact-based, inverted pyramid)"
+    ]
+    tone_setting = st.selectbox("Tone", tone_options)
+    
+    aud_options = [
+        "General Public (Accessible, clear, no jargon)",
+        "Developer (Technical depth, code concepts)",
+        "Executive (Strategic, high-level summary, ROI focus)",
+        "Recruiter (Skills focus, career progression)",
+        "Grand Parent (Simple metaphors, respectful, patient)",
+        "Teenager (Fast-paced, authentic, minimal slang)",
+        "Child (Simple words, exciting analogies, educational)",
+        "Hobbyist (Passionate, detailed, practical tips)",
+        "CEO (Concise, strategic, bottom-line upfront)"
+    ]
+    audience_setting = st.selectbox("Audience", aud_options)
     
     st.markdown("#### 📜 Activity Log")
     st.text_area("", value="\n".join(st.session_state.log_events), height=100, disabled=True, key="logs_display")
 
-# --- TOPIC & KEYWORDS ---
+# --- TOPIC SECTION ---
 st.markdown("---")
-c_topic, c_seo = st.columns([2, 1])
+st.markdown("### 💡 Topic")
+topic = st.text_area("", height=100, placeholder="Enter prompt...", label_visibility="collapsed")
 
-with c_topic:
-    st.markdown("### 💡 Topic")
-    topic = st.text_area("", height=100, placeholder="Enter prompt...", label_visibility="collapsed")
-    # NEW HEADLINE SUGGESTER
-    if st.button("✨ Suggest Headlines"):
-        if topic:
-            with st.spinner("Brainstorming..."):
-                st.session_state.headline_ideas = agent_headlines(topic)
-    
-    if st.session_state.headline_ideas:
-        st.info(st.session_state.headline_ideas)
+# ROW 2: HEADLINE & IMAGE PROMPT (Side by Side)
+c_head, c_img = st.columns(2)
+with c_head:
+    headline_hint = st.text_input("Suggested Headline (Optional)", placeholder="Enter a headline to guide the AI...")
+with c_img:
+    img_prompt = st.text_input("Custom Image Prompt (Optional)", placeholder="Describe the image... (Leave empty for auto-gen)")
 
-with c_seo:
-    st.markdown("### 🔑 SEO Keywords")
+# ROW 3: SEO
+st.markdown("### 🔑 SEO Keywords")
+c_seo_txt, c_seo_btn = st.columns([4, 1])
+with c_seo_txt:
     keywords = st.text_area("", value=st.session_state.seo_keywords, height=68, label_visibility="collapsed")
-    # MOVED BUTTON BELOW BOX
+    st.session_state.seo_keywords = keywords
+with c_seo_btn:
     if st.button("✨ Choose For Me"):
         if topic: st.session_state.seo_keywords = agent_seo(topic)
-    st.session_state.seo_keywords = keywords
 
 # --- STATUS & COST ---
 st.markdown("---")
@@ -346,8 +378,9 @@ with s2:
         st.write(st.session_state.costs)
         st.selectbox("Model:", ["claude-sonnet-4-20250514", "claude-3-5-sonnet", "claude-3-opus"], key="claude_model_selection")
 
-# START BUTTON
-if st.button("🚀 Start Elite Workflow", type="primary", use_container_width=True):
+# START BUTTON (NEON GREEN VIA CSS)
+st.write("")
+if st.button("Start Sharp Bloggling", type="primary", use_container_width=True):
     if not topic:
         st.warning("Please enter a topic.")
     else:
@@ -370,7 +403,7 @@ if st.button("🚀 Start Elite Workflow", type="primary", use_container_width=Tr
         
         if research_data:
             st.session_state.current_workflow_status = "Drafting..."
-            blog = agent_writer(topic, research_data, style_sample, tone_setting, keywords, audience_setting, transcript_txt, st.session_state.claude_model_selection)
+            blog = agent_writer(topic, headline_hint, research_data, style_sample, tone_setting, keywords, audience_setting, transcript_txt, st.session_state.claude_model_selection)
             
             if blog:
                 st.session_state.elite_blog_v8 = blog
@@ -395,7 +428,8 @@ if st.session_state.elite_blog_v8:
         st.subheader("👁️ Preview")
         
         if st.session_state.get('elite_image_v8'):
-            st.image(st.session_state.elite_image_v8, use_container_width=True)
+            # FIXED WIDTH for blog look
+            st.image(st.session_state.elite_image_v8, width=600)
             with st.expander("🎨 Regenerate Image"):
                 regen_prompt = st.text_input("New Image Prompt", placeholder="Describe desired image...")
                 if st.button("Regenerate Art"):
@@ -406,7 +440,7 @@ if st.session_state.elite_blog_v8:
                             st.rerun()
         
         html_preview = f"""
-        <div style="background-color: white; color: black; padding: 40px; border-radius: 10px; font-family: sans-serif;">
+        <div style="background-color: white; color: black; padding: 40px; border-radius: 10px; font-family: sans-serif; max-width: 800px; margin: 0 auto;">
             <h1 style="color: black;">{st.session_state.final_title}</h1>
             <p><em>{st.session_state.final_excerpt}</em></p>
             <hr>
@@ -418,7 +452,6 @@ if st.session_state.elite_blog_v8:
         st.markdown("### 🔄 Refine Draft")
         c_ref_txt, c_ref_btn = st.columns([3, 1])
         with c_ref_txt:
-            # FIX: TEXT AREA & 4 LINES
             refine_inst = st.text_area("Instructions", height=100, placeholder="e.g. Make it punchier...")
         with c_ref_btn:
             st.write("")
@@ -439,14 +472,14 @@ if st.session_state.elite_blog_v8:
                         st.session_state.final_excerpt = new_post['excerpt']
                         st.rerun()
 
-        # HTML EDITOR RESTORED - RIGHT NEXT TO PREVIEW
+        # HTML EDITOR RESTORED
         st.markdown("### ✏️ HTML Editor")
         st.text_input("Title", key='final_title')
         st.text_area("Excerpt (Max 300)", key='final_excerpt', max_chars=300)
         st.text_area("HTML Body", key='final_content', height=600)
 
         if st.button("🚀 Publish to Ghost", type="primary"):
-            tags = ["Sharp Blog"] # CHANGED TAG
+            tags = ["Sharp Blog"] 
             if st.session_state.transcript_context: tags.append("Context Aware")
             final_data = {
                 'title': st.session_state.final_title,
