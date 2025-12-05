@@ -6,7 +6,8 @@ import datetime
 import json
 import io
 import urllib.parse
-import pandas as pd
+import base64
+import random
 from anthropic import Anthropic
 from pypdf import PdfReader
 from docx import Document
@@ -21,26 +22,22 @@ except ImportError:
     textstat_installed = False
 
 # --- CONFIGURATION & NEON THEME ---
-st.set_page_config(page_title="Elite AI Blog Agent v0.14.4", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="Elite AI Blog Agent v0.14.6", page_icon="🧠", layout="wide")
 
 st.markdown("""
 <style>
     /* MAIN BACKGROUND */
     .stApp { background-color: #0e1117; color: #e0e0e0; }
     
-    /* INPUTS - Dark Grey Body, Neon Cyan Text, Purple Focus Border */
+    /* INPUTS */
     .stTextArea textarea, .stTextInput input, .stSelectbox div[data-baseweb="select"] {
         background-color: #1c1c1c !important;
-        color: #00e5ff !important; /* Neon Cyan Text */
+        color: #00e5ff !important; /* Neon Cyan */
         border: 1px solid #333 !important;
         font-family: 'Helvetica Neue', sans-serif !important;
     }
-    .stTextArea textarea:focus, .stTextInput input:focus {
-        border-color: #d500f9 !important; /* Purple Glow on Focus */
-        box-shadow: 0 0 10px #d500f9;
-    }
     
-    /* SQUARE FILE UPLOADER - Cyan Dashed Border */
+    /* SQUARE FILE UPLOADER */
     div[data-testid="stFileUploader"] section {
         background-color: #161b22;
         border: 2px dashed #00e5ff; 
@@ -48,20 +45,17 @@ st.markdown("""
         min-height: 160px !important; 
         display: flex; align-items: center; justify-content: center;
     }
-    div[data-testid="stFileUploader"] section:hover {
-        border-color: #00ffab; /* Turns Green on Hover */
-    }
 
-    /* HEADERS - Cyan to Purple Gradient (Structural) */
+    /* HEADERS */
     h1, h2, h3 {
         background: -webkit-linear-gradient(45deg, #00e5ff, #d500f9);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
     }
     
-    /* START BUTTON - Cyan to Green Gradient (Action) */
+    /* GRADIENT START BUTTON */
     div[data-testid="stButton"] button {
-        background: linear-gradient(45deg, #00e5ff, #00ffab) !important; 
+        background: linear-gradient(45deg, #00e5ff, #00ffab) !important;
         color: #000000 !important;
         border: none !important;
         font-weight: 800 !important;
@@ -122,6 +116,68 @@ def get_clients():
 
 researcher, writer, openai_client = get_clients()
 openai_client_is_valid = openai_client is not None
+
+# --- CUSTOM CELEBRATION ENGINE ---
+def celebrate_with_logos():
+    """
+    Floats the specific Sharp Human logo files up the screen.
+    """
+    
+    # 1. UPDATED LOGO LIST
+    logo_files = [
+        "logo1-1.png", "logo1-2.png", "logo1-3.png", 
+        "logo1-4.png", "logo1-5.png", "logo1-6.png"
+    ]
+    
+    # 2. Helper to load image as Base64
+    def get_img_tag(filename):
+        if os.path.exists(filename):
+            with open(filename, "rb") as f:
+                data = f.read()
+                b64 = base64.b64encode(data).decode()
+                # Added filter: drop-shadow for neon effect
+                return f'<img src="data:image/png;base64,{b64}" style="width: 80px; opacity: 0.95; filter: drop-shadow(0 0 5px rgba(0,229,255,0.5));">'
+        return None
+
+    # 3. Generate Particles
+    particles = []
+    
+    for _ in range(50): # Number of logos
+        left = random.randint(0, 95)
+        delay = random.uniform(0, 3)
+        duration = random.uniform(4, 8)
+        
+        chosen_file = random.choice(logo_files)
+        img_tag = get_img_tag(chosen_file)
+        
+        if not img_tag:
+            # Fallback if file missing: Neon Square
+            color = random.choice(["#00e5ff", "#39ff14", "#d500f9"])
+            content = f'<div style="width: 20px; height: 20px; background-color: {color}; transform: rotate(45deg); box-shadow: 0 0 10px {color};"></div>'
+        else:
+            content = img_tag
+
+        particle_html = f"""
+        <div style="position: fixed; left: {left}%; bottom: -100px; 
+                    animation: floatUp {duration}s ease-in {delay}s forwards; 
+                    z-index: 9999; pointer-events: none;">
+            {content}
+        </div>
+        """
+        particles.append(particle_html)
+
+    # 4. Inject CSS Animation
+    full_html = f"""
+    <style>
+        @keyframes floatUp {{
+            0% {{ bottom: -120px; opacity: 0; transform: scale(0.5) rotate(0deg); }}
+            10% {{ opacity: 1; }}
+            100% {{ bottom: 120vh; opacity: 0; transform: scale(1.1) rotate(20deg); }}
+        }}
+    </style>
+    {''.join(particles)}
+    """
+    st.markdown(full_html, unsafe_allow_html=True)
 
 # --- HELPERS ---
 def extract_text(file):
@@ -196,7 +252,6 @@ def agent_writer(topic, headline_hint, research, style, tone, keywords, audience
     if headline_hint:
         headline_inst = f"MANDATORY HEADLINE: You MUST use this exact headline or a close variation: '{headline_hint}'"
 
-    # 🧠 THE "HELPFUL HUMAN" BRAIN 🧠
     prompt = f"""
     You are a world-class Ghostwriter and Editor. Write a helpful, high-quality blog post.
     
@@ -315,7 +370,7 @@ def upload_ghost(data, img_url, tags):
 
 # --- UI LAYOUT ---
 
-st.title("🧠 Elite AI Blog Agent v0.14.4")
+st.title("🧠 Elite AI Blog Agent v0.14.6")
 st.markdown("Research by **Perplexity** | Writing by **Claude** | Art by **DALL-E**")
 
 # --- 3-COLUMN LAYOUT ---
@@ -333,6 +388,8 @@ with col2:
 
 with col3:
     st.markdown("### 🎯 Target")
+    
+    # DESCRIPTIVE OPTIONS
     tone_options = [
         "Conversational (Friendly, relatable, uses contractions)",
         "Technical (Precise, industry jargon, dense)",
@@ -364,7 +421,7 @@ st.markdown("---")
 st.markdown("### 💡 Topic")
 topic = st.text_area("", height=100, placeholder="Enter prompt...", label_visibility="collapsed")
 
-# ROW 2: HEADLINE & IMAGE PROMPT
+# ROW 2: HEADLINE & IMAGE PROMPT (Side by Side)
 c_head, c_img = st.columns(2)
 with c_head:
     headline_hint = st.text_input("Suggested Headline (Optional)", placeholder="Enter a headline to guide the AI...")
@@ -391,7 +448,7 @@ with s2:
         st.write(st.session_state.costs)
         st.selectbox("Model:", ["claude-sonnet-4-20250514", "claude-3-5-sonnet", "claude-3-opus"], key="claude_model_selection")
 
-# START BUTTON
+# START BUTTON (GRADIENT VIA CSS)
 st.write("")
 if st.button("Start Sharp Bloggling", type="primary", use_container_width=True):
     if not topic:
@@ -432,7 +489,7 @@ if st.button("Start Sharp Bloggling", type="primary", use_container_width=True):
                 st.session_state.current_workflow_status = "Done! Review below."
                 st.rerun()
 
-# --- PREVIEW & REFINE (SIDE-BY-SIDE FIX) ---
+# --- PREVIEW & REFINE ---
 if st.session_state.elite_blog_v8:
     st.divider()
     t1, t2 = st.tabs(["📝 Review & Refine", "📱 Social Media"])
@@ -440,28 +497,21 @@ if st.session_state.elite_blog_v8:
     with t1:
         st.subheader("👁️ Preview")
         
-        # CREATE 50/50 COLUMNS
         c_preview_img, c_preview_html = st.columns(2)
 
-        # --- LEFT COLUMN: IMAGE & REGENERATE ---
         with c_preview_img:
             if st.session_state.get('elite_image_v8'):
-                # Use use_container_width to fill the 50% column nicely
                 st.image(st.session_state.elite_image_v8, use_container_width=True)
-                st.write("") # Spacer
                 with st.expander("🎨 Regenerate Image"):
                     regen_prompt = st.text_input("New Image Prompt", placeholder="Describe desired image...", key="regen_box")
                     if st.button("Regenerate Art", key="regen_btn"):
-                        # Spinner is isolated to this column
-                        with st.spinner("Painting... (This may take 30s)"):
+                        with st.spinner("Painting..."):
                             new_url = agent_artist(topic, tone_setting, audience_setting, custom_prompt=regen_prompt)
                             if new_url: 
                                 st.session_state.elite_image_v8 = new_url
                                 st.rerun()
 
-        # --- RIGHT COLUMN: HTML PREVIEW ---
         with c_preview_html:
-             # This lives outside the regenerate logic, so it stays visible
              html_preview = f"""
             <div style="background-color: white; color: black; padding: 40px; border-radius: 10px; font-family: sans-serif;">
                 <h1 style="color: black;">{st.session_state.final_title}</h1>
@@ -472,7 +522,6 @@ if st.session_state.elite_blog_v8:
             """
              components.html(html_preview, height=600, scrolling=True)
 
-        # --- BELOW COLUMNS: REFINE & EDITOR ---
         st.divider()
         st.markdown("### 🔄 Refine Draft")
         c_ref_txt, c_ref_btn = st.columns([3, 1])
@@ -497,7 +546,6 @@ if st.session_state.elite_blog_v8:
                         st.session_state.final_excerpt = new_post['excerpt']
                         st.rerun()
 
-        # HTML EDITOR
         st.markdown("### ✏️ HTML Editor")
         st.text_input("Title", key='final_title')
         st.text_area("Excerpt (Max 300)", key='final_excerpt', max_chars=300)
@@ -514,8 +562,8 @@ if st.session_state.elite_blog_v8:
                 'meta_description': st.session_state.elite_blog_v8.get('meta_description')
             }
             if upload_ghost(final_data, st.session_state.get('elite_image_v8'), tags):
+                celebrate_with_logos()
                 st.success("Published!")
-                st.balloons()
             else:
                 st.error("Failed.")
 
