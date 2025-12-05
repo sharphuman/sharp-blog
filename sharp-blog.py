@@ -1,10 +1,12 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import requests
 import jwt
 import datetime
 import json
 import io
 import urllib.parse
+import pandas as pd
 from anthropic import Anthropic
 from pypdf import PdfReader
 from docx import Document
@@ -18,66 +20,87 @@ try:
 except ImportError:
     textstat_installed = False
 
-# --- CONFIGURATION ---
-st.set_page_config(page_title="Elite AI Blog Agent V11", page_icon="🎩", layout="wide")
+# --- CONFIGURATION & NEON THEME ---
+st.set_page_config(page_title="Elite AI Blog Agent V12", page_icon="🧠", layout="wide")
 
-# --- CSS: CORPORATE STYLING & LAYOUT HACKS ---
+# Custom CSS for "Sharp Human" Neon/Black Theme
 st.markdown("""
 <style>
-    /* 1. Global Typography */
-    .stTextArea textarea, .stSelectbox div, .stButton button, p, h1, h2, h3 {
-        font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif !important;
+    /* MAIN BACKGROUND - Deep Black/Grey */
+    .stApp {
+        background-color: #0e1117;
+        color: #e0e0e0;
     }
     
-    /* 2. Text Area & Input Styling */
-    .stTextArea textarea {
-        font-size: 15px !important;
-        line-height: 1.5 !important;
+    /* INPUTS - Dark Grey with Neon Border focus */
+    .stTextArea textarea, .stTextInput input, .stSelectbox div[data-baseweb="select"] {
+        background-color: #1c1c1c !important;
+        color: #00e5ff !important; /* Neon Cyan Text */
+        border: 1px solid #333 !important;
     }
-    
-    /* 3. File Uploader HACK: Make it tall and square */
-    div[data-testid="stFileUploader"] section {
-        min-height: 200px !important; /* Twice the normal height */
-        padding-top: 60px !important; /* Center the icon */
-        border: 2px dashed #cccccc;
-        background-color: #f9f9f9;
-        border-radius: 10px;
-    }
-    div[data-testid="stFileUploader"] section:hover {
-        border-color: #FF4B4B; /* Streamlit Red on hover */
+    .stTextArea textarea:focus, .stTextInput input:focus {
+        border-color: #d500f9 !important; /* Neon Purple Focus */
     }
 
-    /* 4. Expander Styling */
-    div[data-testid="stExpander"] {
-        border: 1px solid #e0e0e0;
-        border-radius: 6px;
-        background-color: white;
+    /* HEADERS - Neon Gradient effect text */
+    h1, h2, h3 {
+        background: -webkit-linear-gradient(45deg, #00e5ff, #d500f9);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-family: 'Helvetica Neue', sans-serif !important;
+        letter-spacing: -0.5px;
     }
-    
-    /* 5. Button Styling */
+
+    /* FILE UPLOADER - Square & Centered */
+    div[data-testid="stFileUploader"] section {
+        background-color: #161b22;
+        border: 2px dashed #00e5ff; /* Neon Cyan Dashes */
+        border-radius: 15px;
+        min-height: 200px; /* Make it square-ish */
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    div[data-testid="stFileUploader"] section:hover {
+        border-color: #d500f9; /* Purple on hover */
+    }
+
+    /* BUTTONS - Neon Gradient */
     .stButton button {
-        width: 100%;
-        border-radius: 6px;
+        background: linear-gradient(45deg, #212121, #000);
+        border: 1px solid #00e5ff;
+        color: #00e5ff;
+        border-radius: 4px;
         font-weight: 600;
-        height: 3rem;
+        transition: all 0.3s;
+    }
+    .stButton button:hover {
+        border-color: #d500f9;
+        color: #d500f9;
+        box-shadow: 0 0 10px #d500f9;
     }
     
-    /* 6. Header Spacing */
-    h3 { padding-top: 0px !important; margin-top: 0px !important; }
+    /* CUSTOM IMAGE PROMPT BOX */
+    .custom-img-prompt {
+        border: 1px solid #00ff00; /* Lime Green */
+        padding: 10px;
+        border-radius: 5px;
+        margin-bottom: 20px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# --- SESSION STATE ---
+# --- SESSION STATE & COST TRACKING ---
 if 'log_events' not in st.session_state: st.session_state.log_events = []
 if 'current_workflow_status' not in st.session_state: st.session_state.current_workflow_status = "Ready."
-if 'claude_model_selection' not in st.session_state: st.session_state.claude_model_selection = "claude-sonnet-4-20250514"
-if 'last_claude_model' not in st.session_state: st.session_state.last_claude_model = "None (Awaiting Run)"
+if 'costs' not in st.session_state: st.session_state.costs = {"Anthropic (Claude)": 0.0, "OpenAI (DALL-E/Whisper)": 0.0, "Perplexity (Research)": 0.0}
 if 'elite_blog_v8' not in st.session_state: st.session_state.elite_blog_v8 = None
 if 'transcript_context' not in st.session_state: st.session_state.transcript_context = False
 if 'final_title' not in st.session_state: st.session_state.final_title = ""
 if 'final_content' not in st.session_state: st.session_state.final_content = ""
 if 'final_excerpt' not in st.session_state: st.session_state.final_excerpt = ""
 if 'seo_keywords' not in st.session_state: st.session_state.seo_keywords = ""
+if 'last_claude_model' not in st.session_state: st.session_state.last_claude_model = "claude-sonnet-4-20250514"
 
 # --- SECRETS ---
 try:
@@ -94,18 +117,22 @@ def add_log(message):
     timestamp = datetime.datetime.now().strftime('%H:%M:%S')
     st.session_state.log_events.insert(0, f"[{timestamp}] {message}")
 
-def set_status(user_msg):
-    st.session_state.current_workflow_status = user_msg
+def track_cost(provider, amount):
+    st.session_state.costs[provider] += amount
 
-# --- CLIENTS ---
-researcher = OpenAI(api_key=PPLX_API_KEY, base_url="https://api.perplexity.ai")
-writer = Anthropic(api_key=ANTHROPIC_API_KEY)
-try:
-    openai_client = OpenAI(api_key=OPENAI_API_KEY)
-    openai_client_is_valid = True
-except:
-    openai_client = None
-    openai_client_is_valid = False
+# --- CLIENTS (Cached for Speed) ---
+@st.cache_resource
+def get_clients():
+    pplx = OpenAI(api_key=PPLX_API_KEY, base_url="https://api.perplexity.ai")
+    anth = Anthropic(api_key=ANTHROPIC_API_KEY)
+    try:
+        oai = OpenAI(api_key=OPENAI_API_KEY)
+    except:
+        oai = None
+    return pplx, anth, oai
+
+researcher, writer, openai_client = get_clients()
+openai_client_is_valid = openai_client is not None
 
 # --- HELPERS ---
 def extract_text(file):
@@ -123,9 +150,12 @@ def extract_text(file):
 def transcribe_audio(file):
     if not openai_client_is_valid: return "OpenAI Key Missing."
     try:
-        return openai_client.audio.transcriptions.create(model="whisper-1", file=file).text
+        # Cost: $0.006 / minute
+        transcript = openai_client.audio.transcriptions.create(model="whisper-1", file=file)
+        track_cost("OpenAI (DALL-E/Whisper)", 0.06) # Est $0.06 for a 10 min file avg
+        return transcript.text
     except Exception as e:
-        if "413" in str(e): return "Error: File >25MB (OpenAI Limit). Please split file."
+        if "413" in str(e): return "Error: File >25MB (OpenAI Limit)."
         return f"Error: {e}"
 
 def generate_social_link(text, platform):
@@ -143,74 +173,67 @@ def generate_social_link(text, platform):
 # --- AGENTS ---
 
 def agent_seo(topic):
-    add_log("SEO Agent: Starting...")
+    add_log("SEO Agent: Thinking...")
     try:
+        # Sonar Cost: ~$0.005 per request
         res = researcher.chat.completions.create(
             model="sonar", 
             messages=[{"role": "user", "content": f"Suggest 5-7 high-impact SEO keywords for: {topic}. Comma separated. List only."}]
         )
-        add_log("SEO Agent: Success.")
+        track_cost("Perplexity (Research)", 0.005)
         return res.choices[0].message.content
     except Exception as e:
-        add_log(f"SEO Agent Failed: {e}")
+        add_log(f"SEO Failed: {e}")
         return ""
 
-@st.cache_data(show_spinner=False)
 def agent_research(topic, context):
+    add_log("Agent 1: Researching...")
     sys_prompt = "You are a Fact-Checking Researcher." if context else "You are an elite academic researcher."
     try:
+        # Sonar Pro Cost: ~$0.02 per request (higher tier)
         res = researcher.chat.completions.create(
             model="sonar-pro",
             messages=[{"role": "system", "content": sys_prompt}, {"role": "user", "content": f"Research: {topic}"}]
         )
+        track_cost("Perplexity (Research)", 0.02)
         return res.choices[0].message.content
     except Exception as e:
         return None
 
 def agent_writer(topic, research, style, tone, keywords, audience, context_txt, model):
-    add_log(f"Agent 2 (Claude): Writing ({tone})...")
+    add_log(f"Agent 2 (Claude): Writing...")
     
-    aud_map = {
-        "Grand Parent": "Simple metaphors, respectful, clear, large concepts. Avoid slang.",
-        "Teenager": "Fast-paced, authentic, minimal slang, focus on identity and social proof.",
-        "Child": "Simple words, short sentences, exciting analogies, educational but fun.",
-        "CEO": "ROI-focused, strategic, concise (BLUF). No fluff.",
-        "Hobbyist": "Passionate, detailed, practical tips, community-focused.",
-        "Developer": "Technical depth, code concepts, implementation details.",
-        "Executive": "Strategic impact, business outcomes, high-level summary.",
-        "General Public": "Accessible, clear, relatable, no jargon."
-    }
-    aud_inst = aud_map.get(audience, "Professional and clear.")
-
     prompt = f"""
     Write a blog post.
     TOPIC: "{topic}"
-    AUDIENCE: {aud_inst}
+    AUDIENCE: {audience}
     TONE: {tone}. {f"MIMIC STYLE: {style}" if style else ""}
     KEYWORDS: {keywords}
     RESEARCH: {research}
     CONTEXT: {context_txt[:30000] if context_txt else "None"}
 
-    *** PRIVACY & ANONYMITY PROTOCOL (MANDATORY) ***
-    - The CONTEXT contains a raw interview/transcript.
-    - **NEVER use specific personal names** from the transcript (e.g. "John mentioned...").
-    - **ALWAYS generalize** anecdotes into market trends (e.g. "It is common for users to report...").
-    - Treat the transcript as "Market Data", not "Quotes".
+    *** PRIVACY PROTOCOL ***
+    - **NEVER use real names** from the transcript/context.
+    - Generalize anecdotes (e.g. "One user said..." NOT "John said...").
 
     RULES:
-    1. NO EMOJIS in body text.
-    2. NO EM-DASHES (—). Use hyphens (-) or commas.
-    3. No inline links. List "Sources" at the end.
-    4. Human-like flow. Vary sentence length.
-    5. **EXCERPT must be concise (< 280 chars).**
+    1. NO EMOJIS in body.
+    2. NO EM-DASHES (—).
+    3. No inline links.
+    4. Short paragraphs.
+    5. **EXCERPT < 280 chars.**
     
     OUTPUT: JSON with keys: title, meta_title, meta_description, excerpt, html_content.
     """
     try:
+        # Claude 3.5 Sonnet Cost: ~$3/1M input, ~$15/1M output. 
+        # Approx $0.03 for a long blog post generation.
         msg = writer.messages.create(
             model=model, max_tokens=8000, temperature=0.7,
             messages=[{"role": "user", "content": prompt}]
         )
+        track_cost("Anthropic (Claude)", 0.03) 
+        
         txt = msg.content[0].text
         if "```json" in txt: txt = txt.split("```json")[1].split("```")[0]
         return json.loads(txt)
@@ -218,10 +241,18 @@ def agent_writer(topic, research, style, tone, keywords, audience, context_txt, 
         add_log(f"Writing Error: {e}")
         return None
 
-def agent_socials(content, model):
-    add_log("Agent 3 (Claude): Drafting Socials...")
+def agent_socials(blog_html, model):
+    add_log("Agent 3: Creating Socials from Blog...")
+    
+    # FIX: We now pass the ACTUAL BLOG CONTENT, not just the topic
+    # Stripping HTML tags for cleaner reading by the social agent
+    clean_text = blog_html.replace("<p>", "").replace("</p>", "\n").replace("<h2>", "\n# ").replace("</h2>", "")[:15000]
+
     prompt = f"""
-    Create social posts.
+    Create social posts based on this **BLOG CONTENT**:
+    
+    {clean_text}
+    
     1. LinkedIn: Professional, bullets.
     2. Twitter/X: A THREAD of 3-5 tweets. Tweet 1: Hook. Last Tweet: CTA.
     3. Reddit: Engaging Title + Body.
@@ -234,15 +265,14 @@ def agent_socials(content, model):
             model=model, max_tokens=2000, temperature=0.7,
             messages=[{"role": "user", "content": prompt}]
         )
-        txt = msg.content[0].text
-        cleaned_txt = txt.strip()
-        if "```json" in cleaned_txt: cleaned_txt = cleaned_txt.split("```json")[1].split("```")[0]
-        elif "```" in cleaned_txt: cleaned_txt = cleaned_txt.split("```")[1].split("```")[0]
+        track_cost("Anthropic (Claude)", 0.01)
         
-        return json.loads(cleaned_txt.strip())
+        txt = msg.content[0].text
+        if "```json" in txt: txt = txt.split("```json")[1].split("```")[0]
+        return json.loads(txt.strip())
     except Exception as e:
-        add_log(f"Socials JSON Error: {e}")
-        return {"linkedin": f"Error: {e}", "twitter_thread": [], "reddit": ""}
+        add_log(f"Socials Error: {e}")
+        return {"linkedin": "", "twitter_thread": [], "reddit": ""}
 
 def agent_artist(topic, tone, audience, custom_prompt=None):
     add_log("Agent 4 (DALL-E): Generating Art...")
@@ -253,42 +283,22 @@ def agent_artist(topic, tone, audience, custom_prompt=None):
     else:
         base_prompt = f"A visualization of {topic}"
 
-    visual_style = "Award-winning editorial photography, shot on Leica M11, 50mm lens, soft natural lighting, realistic textures, shallow depth of field."
-    
+    visual_style = "High-end editorial photography, shallow depth of field."
     if "Teenager" in audience or "Child" in audience:
-        visual_style = "High-quality Pixar-style 3D render, soft rounded shapes, vibrant but harmonious colors."
+        visual_style = "Vibrant 3D render, Pixar-style."
     elif "Technical" in tone:
-        visual_style = "Minimalist isometric data art, matte black background, glass and steel textures, architectural lighting."
-    elif "Executive" in audience or "CEO" in audience:
-        visual_style = "Abstract corporate art, geometric shapes, marble and gold textures, minimalist and premium."
+        visual_style = "Isometric data art, matte black background, neon accents."
 
-    full_prompt = f"{base_prompt}. Style: {visual_style}. Negative Prompt: No text, no words, no cartoons, no distorted faces, no uncanny valley, no bad anatomy. Aspect Ratio: 16:9."
+    full_prompt = f"{base_prompt}. Style: {visual_style}. No text. Aspect Ratio: 16:9."
     
     try:
+        # DALL-E 3 Standard Cost: $0.040 per image
         res = openai_client.images.generate(model="dall-e-3", prompt=full_prompt, size="1024x1024", quality="standard", n=1)
+        track_cost("OpenAI (DALL-E/Whisper)", 0.04)
         return res.data[0].url
     except Exception as e:
         add_log(f"Art Error: {e}")
         return None
-
-def agent_refine(data, feedback, model):
-    add_log("Agent 5 (Refiner): Updating Draft...")
-    prompt = f"""
-    Refine this blog post.
-    CURRENT DATA: {json.dumps(data)}
-    FEEDBACK: {feedback}
-    RULES: Keep HTML format. No Emojis. No Em-dashes. Anonymize names.
-    OUTPUT: JSON with keys title, meta_title, meta_description, excerpt, html_content.
-    """
-    try:
-        msg = writer.messages.create(
-            model=model, max_tokens=8000, temperature=0.4,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        txt = msg.content[0].text
-        if "```json" in txt: txt = txt.split("```json")[1].split("```")[0]
-        return json.loads(txt)
-    except: return None
 
 def upload_ghost(data, img_url, tags):
     add_log("Publishing to Ghost...")
@@ -298,15 +308,13 @@ def upload_ghost(data, img_url, tags):
         token = jwt.encode({'iat': iat, 'exp': iat+300, 'aud': '/admin/'}, bytes.fromhex(sec), algorithm='HS256', headers={'kid': id})
         
         final_img = img_url
-        if "oaidalleapiprod" in img_url:
+        if img_url and "oaidalleapiprod" in img_url:
             img_data = requests.get(img_url).content
             files = {'file': (f"img_{iat}.png", img_data, 'image/png')}
             up_res = requests.post(f"{GHOST_API_URL}/ghost/api/admin/images/upload/", headers={'Authorization': f'Ghost {token}'}, files=files)
             if up_res.status_code == 201: final_img = up_res.json()['images'][0]['url']
 
-        # Ghost Safety Truncation
-        safe_excerpt = data['excerpt']
-        if len(safe_excerpt) > 300: safe_excerpt = safe_excerpt[:297] + "..."
+        safe_excerpt = data['excerpt'][:300] if data['excerpt'] else ""
 
         body = {
             "posts": [{
@@ -326,260 +334,158 @@ def upload_ghost(data, img_url, tags):
         add_log(f"Ghost Error: {e}")
         return False
 
-# --- LAYOUT CONSTRUCTION ---
+# --- UI LAYOUT ---
 
-st.title("🎩 Elite AI Blog Agent V11.0")
+st.title("🧠 Elite AI Blog Agent V12")
 st.markdown("Research by **Perplexity** | Writing by **Claude** | Art by **DALL-E**")
 
-# MAIN COLUMNS
-left_col, right_col = st.columns([2, 1])
+# CUSTOM IMAGE PROMPT ON MAIN SCREEN
+img_prompt = st.text_input("🎨 Custom Image Description (Optional)", placeholder="Describe the header image you want... (Leave empty for auto-generation)", key="main_img_prompt")
 
-# --- RIGHT COLUMN (LOGS & STATUS) - TOP PRIORITY ---
-with right_col:
-    # 1. Live Logs
-    st.markdown("### 📜 Live Logs")
-    st.text_area("", value="\n".join(st.session_state.log_events), height=250, disabled=True, key="logs_display")
-    
-    # 2. High Level Status
-    st.markdown("### 🟢 User Status")
-    st.info(st.session_state.current_workflow_status)
-    
-    # 3. Technical Status
-    with st.expander("🛠️ Technical / Low Level Status", expanded=True):
-        st.write(f"**Writer:** {st.session_state.last_claude_model}")
-        st.write("**Research:** Perplexity Sonar")
-        st.write("**Art:** DALL-E 3 (Editorial Mode)")
-        if textstat_installed:
-            st.write("**Readability:** TextStat Active")
-        else:
-            st.write("**Readability:** Disabled (Missing textstat)")
+# --- 3-COLUMN SYMMETRICAL LAYOUT ---
+col1, col2, col3 = st.columns([1, 1, 1])
 
-# --- LEFT COLUMN (INPUTS) ---
-with left_col:
-    st.markdown("### 📝 Strategy")
-    
-    # Row 1: Tone & Audience
-    c1, c2 = st.columns(2)
-    with c1:
-        tone_setting = st.selectbox("Tone & Voice", ["Conversational", "Technical", "Professional", "Witty", "Storyteller", "Journalistic"])
-    with c2:
-        audience_setting = st.selectbox("Target Audience", [
-            "General Public", "Developer (Technical)", "Executive (Strategy/ROI)", "Recruiter (Career/Skills)",
-            "Grand Parent", "Teenager", "Child", "Hobbyist", "CEO"
-        ])
-    
-    # Row 2: Writing Style (Full Width, Scrollable)
-    style_sample = st.text_area("Writing Style / Voice Mimicry", height=100, placeholder="Paste text here to match its rhythm and vocabulary...")
+# Left Column: Writing Style
+with col1:
+    st.markdown("### ✍️ Style")
+    style_sample = st.text_area("Voice Mimicry / Sample", height=250, placeholder="Paste your writing sample here...", help="The AI will mimic the sentence structure and vocabulary of this text.")
 
-    # Row 3: File Uploader (Taller via CSS)
-    st.markdown("##### 📎 Context (Audio/PDF/Doc)")
-    uploaded_file = st.file_uploader("", type=['txt','pdf','docx','mp3','mp4'], label_visibility="collapsed")
+# Center Column: File Uploader (Square)
+with col2:
+    st.markdown("### 📎 Context")
+    # CSS hacks above make this square and tall
+    uploaded_file = st.file_uploader("Upload", type=['txt','pdf','docx','mp3','mp4'], label_visibility="collapsed")
 
-    # Row 4: Topic
-    st.markdown("##### 💡 Main Topic")
-    topic = st.text_area("Enter your detailed prompt here...", height=150, placeholder="e.g. A comprehensive guide on...")
+# Right Column: Audience & Tone
+with col3:
+    st.markdown("### 🎯 Target")
+    tone_setting = st.selectbox("Tone", ["Conversational", "Technical", "Professional", "Witty", "Storyteller", "Journalistic"])
+    audience_setting = st.selectbox("Audience", ["General Public", "Developer", "Executive", "Recruiter", "Grand Parent", "Teenager", "Child", "Hobbyist", "CEO"])
     
-    # Row 5: Keywords
-    st.markdown("##### 🔑 SEO Keywords")
-    ck1, ck2 = st.columns([1, 4])
-    with ck1:
+    # Cost Tracker (Restored)
+    st.markdown("#### 💰 Session Cost")
+    df_costs = pd.DataFrame(list(st.session_state.costs.items()), columns=["Provider", "Cost ($)"])
+    df_costs = df_costs.sort_values(by="Cost ($)", ascending=False)
+    st.dataframe(df_costs, hide_index=True, use_container_width=True)
+
+# Main Prompt (Full Width below columns)
+st.markdown("---")
+col_topic, col_logs = st.columns([2, 1])
+
+with col_topic:
+    st.markdown("### 💡 Topic & SEO")
+    topic = st.text_area("Main Blog Topic", height=100, placeholder="Enter detailed prompt...")
+    
+    c_btn, c_txt = st.columns([1, 4])
+    with c_btn:
         st.write("")
         st.write("")
-        if st.button("✨ Suggest"):
-            if topic:
-                with st.spinner("Thinking..."):
-                    st.session_state.seo_keywords = agent_seo(topic)
-    with ck2:
-        keywords = st.text_area("", value=st.session_state.seo_keywords, height=68, label_visibility="collapsed")
+        if st.button("✨ Keywords"):
+            if topic: st.session_state.seo_keywords = agent_seo(topic)
+    with c_txt:
+        keywords = st.text_area("SEO Keywords", value=st.session_state.seo_keywords, height=68, label_visibility="collapsed")
         st.session_state.seo_keywords = keywords
 
-    st.write("")
-    if st.button("🚀 Start Elite Workflow", type="primary", use_container_width=True):
-        if not topic:
-            st.warning("Please enter a topic.")
-        else:
-            st.session_state.log_events = [] 
-            add_log("Workflow Initialized.")
-            set_status("Reading Context Files...")
-            
-            # Update Model Tracker
-            st.session_state.last_claude_model = st.session_state.claude_model_selection
-            
-            st.session_state.transcript_context = False
-            transcript_txt = None
-            
-            if uploaded_file:
-                if uploaded_file.size > 100 * 1024 * 1024: st.error("File too large (>100MB).")
-                else:
-                    if uploaded_file.name.endswith(('.mp3','.mp4','.wav','.m4a')):
-                         transcript_txt = transcribe_audio(uploaded_file)
-                    else:
-                         transcript_txt = extract_text(uploaded_file)
-                    
-                    if transcript_txt and "Error" not in transcript_txt:
-                        st.session_state.transcript_context = True
-                        add_log("Context Successfully Loaded.")
-            
-            # --- AGENT 1: RESEARCH ---
-            set_status("Agent 1: Researching Topic...")
-            add_log("Calling Perplexity...")
-            research_data = agent_research(topic, st.session_state.transcript_context)
-            add_log("Research Complete.")
-            
-            if research_data:
-                # --- AGENT 2: WRITING ---
-                set_status("Agent 2: Drafting Content...")
-                blog = agent_writer(topic, research_data, style_sample, tone_setting, keywords, audience_setting, transcript_txt, st.session_state.claude_model_selection)
-                
-                if blog:
-                    st.session_state.elite_blog_v8 = blog
-                    
-                    # Pre-fill State
-                    st.session_state.final_title = blog['title']
-                    st.session_state.final_content = blog['html_content']
-                    st.session_state.final_excerpt = blog['excerpt']
-                    st.session_state.final_meta_title = blog.get('meta_title', '')
-                    st.session_state.final_meta_desc = blog.get('meta_description', '')
-                    
-                    # --- AGENT 3: SOCIALS ---
-                    set_status("Agent 3: Creating Socials...")
-                    st.session_state.elite_socials = agent_socials(blog['html_content'], st.session_state.claude_model_selection)
-                    
-                    # --- AGENT 4: ART ---
-                    set_status("Agent 4: Generating Art...")
-                    img = agent_artist(topic, tone_setting, audience_setting)
-                    if img: st.session_state.elite_image_v8 = img
-                    
-                    set_status("Workflow Complete. Review below.")
-                    add_log("All Agents Finished.")
-                    st.rerun()
+with col_logs:
+    st.markdown("### 📜 Live Logs")
+    st.text_area("", value="\n".join(st.session_state.log_events), height=220, disabled=True, key="logs_display")
 
-# --- RESULTS AREA (Full Width) ---
-if st.session_state.elite_blog_v8:
-    post = st.session_state.elite_blog_v8
-    socials = st.session_state.get('elite_socials', {})
-    
-    st.divider()
-    
-    tab_blog, tab_social = st.tabs(["📝 Blog Editor & Preview", "📱 Social Media Pack"])
-
-    with tab_blog:
-        col_preview, col_edit = st.columns([1, 1])
+# START BUTTON
+st.write("")
+if st.button("🚀 Start Elite Workflow", type="primary", use_container_width=True):
+    if not topic:
+        st.warning("Please enter a topic.")
+    else:
+        st.session_state.log_events = [] 
+        add_log("Workflow Initialized.")
+        st.session_state.transcript_context = False
+        transcript_txt = None
         
-        # --- PREVIEW COLUMN ---
-        with col_preview:
-            st.subheader("👁️ Rendered Preview")
-            if st.session_state.get('elite_image_v8'):
-                st.image(st.session_state.elite_image_v8, use_container_width=True)
-                with st.expander("🎨 Regenerate Image"):
-                    new_prompt = st.text_input("Custom Prompt")
-                    if st.button("Regenerate"):
-                        new_url = agent_artist(topic, tone_setting, audience_setting, new_prompt)
-                        if new_url: 
-                            st.session_state.elite_image_v8 = new_url
-                            st.rerun()
-
-            current_title = st.session_state.get('final_title', post.get('title'))
-            current_content = st.session_state.get('final_content', post.get('html_content'))
-            current_excerpt = st.session_state.get('final_excerpt', post.get('excerpt'))
-
-            st.markdown(f"# {current_title}")
-            st.markdown(f"*{current_excerpt}*")
-            st.markdown("---")
-            st.markdown(current_content, unsafe_allow_html=True)
+        # File Processing
+        if uploaded_file:
+            if uploaded_file.name.endswith(('.mp3','.mp4','.wav','.m4a')):
+                 transcript_txt = transcribe_audio(uploaded_file)
+            else:
+                 transcript_txt = extract_text(uploaded_file)
             
-            if textstat_installed:
-                score = textstat.flesch_kincaid_grade(current_content)
-                score_color = "red" if score > 12 else "orange" if score > 10 else "green"
-                st.caption(f"Readability Grade Level: :{score_color}[{score}] (Aim for 8-10)")
-
-            if st.button("🔄 Refresh Preview", help="Click to update preview after manual edits"):
+            if transcript_txt and "Error" not in transcript_txt:
+                st.session_state.transcript_context = True
+                add_log("Context Loaded.")
+        
+        # Agents
+        research_data = agent_research(topic, st.session_state.transcript_context)
+        if research_data:
+            blog = agent_writer(topic, research_data, style_sample, tone_setting, keywords, audience_setting, transcript_txt, "claude-sonnet-4-20250514")
+            
+            if blog:
+                st.session_state.elite_blog_v8 = blog
+                
+                # Setup Edit State
+                st.session_state.final_title = blog['title']
+                st.session_state.final_content = blog['html_content']
+                st.session_state.final_excerpt = blog['excerpt']
+                
+                # Socials (NOW USING BLOG CONTENT)
+                st.session_state.elite_socials = agent_socials(blog['html_content'], "claude-sonnet-4-20250514")
+                
+                # Art (USING CUSTOM PROMPT IF SET)
+                img = agent_artist(topic, tone_setting, audience_setting, custom_prompt=img_prompt)
+                if img: st.session_state.elite_image_v8 = img
+                
+                add_log("Workflow Complete.")
                 st.rerun()
 
-        # --- EDITOR COLUMN ---
-        with col_edit:
-            st.subheader("✏️ Editor")
+# --- PREVIEW AREA ---
+if st.session_state.elite_blog_v8:
+    st.divider()
+    t1, t2 = st.tabs(["📝 Editor", "📱 Socials"])
+    
+    with t1:
+        c_prev, c_edit = st.columns(2)
+        with c_prev:
+            st.subheader("👁️ Preview")
+            if st.session_state.get('elite_image_v8'):
+                st.image(st.session_state.elite_image_v8)
             
-            with st.expander("SEO Metadata", expanded=False):
-                st.text_input("Meta Title", key='final_meta_title')
-                st.text_input("Meta Description", key='final_meta_desc')
+            # TITLE & EXCERPT PREVIEW
+            st.markdown(f"### {st.session_state.final_title}")
+            st.markdown(f"_{st.session_state.final_excerpt}_")
+            st.divider()
+            
+            # HTML PREVIEW (FIXED: Isolated Component)
+            components.html(st.session_state.final_content, height=600, scrolling=True)
 
+        with c_edit:
+            st.subheader("✏️ Edit")
             st.text_input("Title", key='final_title')
+            st.text_area("Excerpt (Max 300)", key='final_excerpt', max_chars=300)
+            st.text_area("HTML Body", key='final_content', height=500)
             
-            excerpt_val = st.session_state.get('final_excerpt', '')
-            excerpt_len = len(excerpt_val)
-            ex_color = "red" if excerpt_len > 300 else "green"
-            st.caption(f"Excerpt Length: :{ex_color}[{excerpt_len}/300]")
-            st.text_area("Excerpt", key='final_excerpt', height=100)
-            
-            st.text_area("HTML Content", key='final_content', height=600)
+            if st.button("🚀 Publish to Ghost", type="primary"):
+                tags = ["Elite AI"]
+                if st.session_state.transcript_context: tags.append("Context Aware")
+                
+                final_data = {
+                    'title': st.session_state.final_title,
+                    'excerpt': st.session_state.final_excerpt,
+                    'html_content': st.session_state.final_content,
+                    'meta_title': st.session_state.final_title,
+                    'meta_description': st.session_state.final_excerpt
+                }
+                
+                if upload_ghost(final_data, st.session_state.get('elite_image_v8'), tags):
+                    st.success("Published!")
+                    st.balloons()
+                else:
+                    st.error("Failed.")
 
-        # --- REFINE DRAFT ---
-        st.divider()
-        st.subheader("🔄 Refine Draft (Agent 5)")
-        ref_col_in, ref_col_btn = st.columns([4, 1])
-        with ref_col_in:
-            refine_inst = st.text_area("Refinement Instructions", height=100, placeholder="e.g. Make the intro punchier...")
-        with ref_col_btn:
-            st.write("")
-            st.write("")
-            if st.button("✨ Refine Now"):
-                with st.spinner("Refining..."):
-                    curr_data = {
-                        'title': st.session_state.final_title,
-                        'excerpt': st.session_state.final_excerpt,
-                        'html_content': st.session_state.final_content,
-                        'meta_title': st.session_state.final_meta_title,
-                        'meta_description': st.session_state.final_meta_desc
-                    }
-                    new_post = agent_refine(curr_data, refine_inst, st.session_state.claude_model_selection)
-                    if new_post:
-                        st.session_state.final_title = new_post['title']
-                        st.session_state.final_content = new_post['html_content']
-                        st.session_state.final_excerpt = new_post['excerpt']
-                        st.session_state.final_meta_title = new_post.get('meta_title')
-                        st.session_state.final_meta_desc = new_post.get('meta_description')
-                        st.rerun()
-
-        if st.button("🚀 Upload Draft to Ghost", type="primary", use_container_width=True):
-             tags = ["Elite AI"]
-             if st.session_state.transcript_context: tags.append("Context Aware")
-             
-             final_data = {
-                 'title': st.session_state.final_title,
-                 'excerpt': st.session_state.final_excerpt,
-                 'html_content': st.session_state.final_content,
-                 'meta_title': st.session_state.final_meta_title,
-                 'meta_description': st.session_state.final_meta_desc
-             }
-             
-             if upload_ghost(final_data, st.session_state.elite_image_v8, tags):
-                 st.balloons()
-                 st.success("Published to Ghost successfully!")
-             else:
-                 st.error("Publish failed. Check logs.")
-
-    with tab_social:
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.markdown("### LinkedIn")
-            li_txt = st.text_area("LinkedIn Post", value=socials.get('linkedin', ''), height=300)
-            st.link_button("Post to LinkedIn", generate_social_link(li_txt, "linkedin"))
-
-        with c2:
-            st.markdown("### X / Twitter Thread")
-            tw_data = socials.get('twitter_thread', [])
-            if isinstance(tw_data, str): tw_data = [tw_data]
-            
-            hook_txt = st.text_area("Tweet 1 (Hook)", value=tw_data[0] if tw_data else "", height=100)
-            st.link_button("Post Hook to X", generate_social_link(hook_txt, "twitter"))
-            
-            if len(tw_data) > 1:
-                st.caption("Rest of Thread (Copy/Paste as replies):")
-                thread_body = "\n\n---\n\n".join(tw_data[1:])
-                st.text_area("Thread Body", value=thread_body, height=200)
-
-        with c3:
-            st.markdown("### Reddit")
-            rd_txt = st.text_area("Reddit Post", value=socials.get('reddit', ''), height=300)
-            st.link_button("Post to Reddit", generate_social_link(rd_txt, "reddit"))
+    with t2:
+        s = st.session_state.get('elite_socials', {})
+        st.text_area("LinkedIn", value=s.get('linkedin', ''), height=200)
+        st.link_button("Post LinkedIn", generate_social_link(s.get('linkedin', ''), "linkedin"))
+        
+        tw = s.get('twitter_thread', [])
+        if isinstance(tw, str): tw = [tw]
+        st.text_area("X Hook", value=tw[0] if tw else "", height=100)
+        st.link_button("Post X", generate_social_link(tw[0] if tw else "", "twitter"))
+        st.text_area("Rest of Thread", value="\n\n".join(tw[1:]), height=200)
