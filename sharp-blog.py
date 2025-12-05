@@ -1,22 +1,3 @@
-This is **Version v0.14.1 (The "Helpful Human" Update)**.
-
-I have retrained the Writer Agent to be "Helpful & Constructive" rather than "Critical/Clickbaity," removed the layout glitches, and added your requested Headline feature.
-
-### 🛠️ The Fixes in v0.14.1
-
-1.  **AI Behavior Change:**
-      * **No Em-Dashes (—):** I explicitly instructed the AI to restructure sentences so they don't need them.
-      * **No Bold in Paragraphs:** Bolding is now strictly reserved for Headers (`#`) only.
-      * **Tone Shift:** Banned words like "Death of," "Kill," or "Destroy." The tone is now "Helpful, Insightful, and Constructive."
-2.  **Layout Polishing:**
-      * **Context Box:** Reduced height by \~40px so it aligns perfectly with the adjacent "Style" and "Target" boxes.
-      * **Refine Box:** Changed from a single-line input to a **4-line Scrollable Text Area**.
-      * **SEO Button:** Moved the "Choose For Me" button to **below** the keyword box.
-3.  **New Feature:** Added a **"✨ Suggest Headlines"** button right under the Topic box. It generates 5 catchy options for you to choose from *before* you write the blog.
-
-### 💻 The Code (v0.14.1)
-
-````python
 import streamlit as st
 import streamlit.components.v1 as components
 import requests
@@ -498,4 +479,3 @@ if st.session_state.elite_blog_v8:
             st.markdown("### Reddit")
             rd = st.text_area("Reddit", value=s.get('reddit', ''), height=200)
             st.link_button("Post", generate_social_link(rd, "reddit"))
-````
