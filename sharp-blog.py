@@ -1,3 +1,8 @@
+I understand the canvas is having issues, so here is the complete code for **Elite Blog Agent V8 (Three-Agent System)**, which restores the full DALL-E/Whisper functionality while maintaining the advanced Claude/Perplexity workflow.
+
+You can copy this directly into your `sharp-blog.py` file.
+
+````python
 import streamlit as st
 import requests
 import jwt # pip install pyjwt
@@ -5,13 +10,13 @@ import datetime
 import json
 import io
 import urllib.parse
-from openai import OpenAI
 from anthropic import Anthropic
 from pypdf import PdfReader # pip install pypdf
 from docx import Document # pip install python-docx
+from openai import OpenAI # RESTORED: OpenAI client for DALL-E/Whisper
 
 # --- CONFIGURATION & SECRETS ---
-st.set_page_config(page_title="Elite AI Blog Agent V6", page_icon="🎩", layout="wide")
+st.set_page_config(page_title="Elite AI Blog Agent V8 (3-Agent System)", page_icon="🎩", layout="wide")
 
 try:
     # Ghost Credentials
@@ -22,7 +27,7 @@ try:
     # AI Credentials
     PPLX_API_KEY = st.secrets.get("PERPLEXITY_API_KEY") or st.secrets["PERPLEXITY_API_KEY"]
     ANTHROPIC_API_KEY = st.secrets.get("ANTHROPIC_API_KEY") or st.secrets["ANTHROPIC_API_KEY"]
-    OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY") or st.secrets["OPENAI_API_KEY"]
+    OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY") or st.secrets["OPENAI_API_KEY"] # RESTORED
     
 except Exception as e:
     # Fallback for when secrets are environment variables
@@ -34,13 +39,23 @@ except Exception as e:
         ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
         OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
     except KeyError as env_error:
-        st.error(f"Missing Secrets: {env_error}. Please set environment variables or .streamlit/secrets.toml")
+        st.error(f"Missing Secrets: {env_error}. Please set all five keys.")
         st.stop()
 
 # --- INITIALIZE SPECIALISTS ---
 researcher = OpenAI(api_key=PPLX_API_KEY, base_url="https://api.perplexity.ai")
 writer = Anthropic(api_key=ANTHROPIC_API_KEY)
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
+
+# --- ISOLATE OPENAI CLIENT INITIALIZATION ---
+try:
+    openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    openai_client_is_valid = True
+except Exception:
+    openai_client = None
+    openai_client_is_valid = False
+    # Display warning in sidebar if key is invalid
+    # st.sidebar.warning("OpenAI Key failed initialization. DALL-E/Whisper will be skipped.")
+
 
 # --- HELPER FUNCTIONS ---
 
@@ -59,6 +74,9 @@ def extract_text_from_docx(file):
     return text
 
 def transcribe_audio(file):
+    global openai_client_is_valid
+    if not openai_client_is_valid:
+        return "Audio transcription skipped: OpenAI client not initialized."
     try:
         transcript = openai_client.audio.transcriptions.create(
             model="whisper-1", 
@@ -66,7 +84,8 @@ def transcribe_audio(file):
         )
         return transcript.text
     except Exception as e:
-        return f"Error transcribing audio: {str(e)}"
+        # Catch specific API errors related to billing or limits
+        return f"Error transcribing audio (OpenAI API Issue): {str(e)}"
 
 def generate_social_links(text, platform):
     encoded_text = urllib.parse.quote(text)
@@ -82,9 +101,9 @@ def generate_social_links(text, platform):
 
 def create_ghost_token():
     try:
-        key_id, secret = GHOST_ADMIN_KEY.split(':')
+        id, secret = GHOST_ADMIN_KEY.split(':')
         iat = int(datetime.datetime.now().timestamp())
-        header = {'alg': 'HS256', 'typ': 'JWT', 'kid': key_id}
+        header = {'alg': 'HS256', 'typ': 'JWT', 'kid': id}
         payload = {'iat': iat, 'exp': iat + (5 * 60), 'aud': '/admin/'}
         return jwt.encode(payload, bytes.fromhex(secret), algorithm='HS256', headers=header)
     except Exception as e:
@@ -125,10 +144,9 @@ def agent_research(topic, transcript_context=None):
         st.error(f"Research Agent Failed: {e}")
         return None
 
-def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, transcript_text=None, claude_model="claude-sonnet-4-20250514"):
-    """AGENT 2: THE WRITER (Claude 3.5 Sonnet)"""
+def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, transcript_text=None, claude_model="claude-3-5-sonnet"):
+    """AGENT 2: THE WRITER (Claude)"""
     
-    # Map tone settings to instructions and temperature
     tone_map = {
         "Technical": (0.2, "Focus on technical accuracy, use industry jargon appropriate for experts, be precise and dense."),
         "Professional": (0.5, "Use a clean, corporate, and concise voice. Be authoritative but accessible."),
@@ -189,7 +207,7 @@ def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, tr
 
     try:
         message = writer.messages.create(
-            _model, # Now uses the selected model
+            model=claude_model,
             max_tokens=8000,
             temperature=temperature,
             messages=[{"role": "user", "content": prompt}]
@@ -204,7 +222,8 @@ def agent_writer(topic, research_notes, style_sample, tone_setting, keywords, tr
         st.error(f"Writer Agent Failed: {e}")
         return None
 
-def agent_social_media(blog_content, claude_model="claude-sonnet-4-20250514"):
+def agent_social_media(blog_content, claude_model="claude-3-5-sonnet"):
+    """AGENT 3: THE SOCIAL MEDIA MANAGER (Claude)"""
     prompt = f"""
     You are a expert social media manager. Based on this blog post content, generate:
     1. A LinkedIn Post (professional, engaging, bullet points).
@@ -219,7 +238,7 @@ def agent_social_media(blog_content, claude_model="claude-sonnet-4-20250514"):
     """
     try:
         message = writer.messages.create(
-            model=claude_model, # Now uses the selected model
+            model=claude_model,
             max_tokens=2000,
             temperature=0.7,
             messages=[{"role": "user", "content": prompt}]
@@ -234,6 +253,10 @@ def agent_social_media(blog_content, claude_model="claude-sonnet-4-20250514"):
         return {"linkedin": "Error", "twitter": "Error", "reddit": "Error"}
 
 def agent_artist(topic):
+    """AGENT 4: THE ARTIST (DALL-E)"""
+    global openai_client_is_valid
+    if not openai_client_is_valid:
+        return None
     try:
         response = openai_client.images.generate(
             model="dall-e-3",
@@ -259,7 +282,7 @@ def publish_to_ghost(data, image_url, tags):
             "meta_title": data.get('meta_title', data['title']),
             "meta_description": data.get('meta_description', data['excerpt']),
             "html": data['html_content'],
-            "feature_image": image_url,
+            "feature_image": image_url, # Image URL restored
             "status": "draft",
             "tags": [{"name": t} for t in tags] 
         }]
@@ -268,17 +291,17 @@ def publish_to_ghost(data, image_url, tags):
 
 # --- UI LAYOUT ---
 
-st.title("🎩 Elite AI Blog Agent V6")
+st.title("🎩 Elite AI Blog Agent V8 (3-Agent System)")
 st.markdown("Research by **Perplexity** | Writing by **Claude** | Art by **DALL-E**")
 
 st.markdown("""
 <div style="border: 1px solid #ddd; padding: 20px; border-radius: 10px; margin-bottom: 25px;">
     <h4>🚀 The World's Most Advanced AI Editorial Team</h4>
     <ul>
-        <li>🗣️ <b>Context Aware:</b> Upload calls/notes (PDF, Doc, Audio) as backstory.</li>
-        <li>🔍 <b>Research & Validation:</b> Perplexity performs deep research AND <b>fact-checks claims</b> against real-time data.</li>
+        <li>🗣️ <b>Multi-Format Context:</b> Upload files (PDF, Doc, **Audio/Video**). We transcribe and read everything.</li>
+        <li>🔍 <b>Research & Validation:</b> Perplexity performs deep research AND <b>fact-checks claims</b>.</li>
         <li>✍️ <b>Style & SEO:</b> Claude mimics your voice AND targets your keywords.</li>
-        <li>📱 <b>Social Pack:</b> Auto-generates LinkedIn, Twitter & Reddit drafts.</li>
+        <li>🎨 <b>Instant Visuals:</b> DALL-E 3 automatically generates a high-quality cover image.</li>
     </ul>
 </div>
 """, unsafe_allow_html=True)
@@ -286,6 +309,9 @@ st.markdown("""
 # SIDEBAR
 with st.sidebar:
     st.header("Configuration")
+    if not openai_client_is_valid:
+        st.error("OpenAI Key failed. DALL-E/Whisper disabled.")
+        
     style_sample = st.text_area("Your Writing Style Sample", height=100, placeholder="Paste a previous blog post...")
     st.divider()
     
@@ -299,12 +325,12 @@ with st.sidebar:
 
     st.divider()
     st.subheader("🛠️ Debugging/Model Select")
-    # New Model Selector for troubleshooting 404
+    # Updated Model Selector options
     claude_model_select = st.selectbox(
         "Claude Model (Select if getting 404 errors):",
-        options=["claude-3-5-sonnet", "claude-3-opus", "claude-3-sonnet", "claude-3-5-sonnet-20241022"],
-        index=0, # Default to the stable alias
-        help="If you just bought your key and get a 404 error, try 'claude-3-opus' first."
+        options=["claude-3-5-sonnet", "claude-3-opus", "claude-3-sonnet"],
+        index=0, 
+        help="The error means your key cannot access the model. Try switching to 'claude-3-opus' if the default fails."
     )
 
 # MAIN INPUT AREA
@@ -327,7 +353,6 @@ with col_input:
                     st.session_state['seo_keywords'] = suggestions
     
     with col_seo_txt:
-        # Uses session state to populate if button was clicked
         keywords = st.text_input(
             "Target SEO Keywords (Optional)", 
             value=st.session_state.get('seo_keywords', ''),
@@ -336,6 +361,7 @@ with col_input:
         )
 
 with col_file:
+    # Full file support restored
     uploaded_file = st.file_uploader("Attach Context (Optional)", type=['txt', 'md', 'pdf', 'docx', 'mp3', 'mp4', 'm4a', 'mpeg', 'wav'])
 
 st.divider()
@@ -359,11 +385,13 @@ if st.button("Start Elite Workflow", type="primary", use_container_width=True):
                     elif file_type in ['mp3', 'mp4', 'm4a', 'mpeg', 'wav']:
                         st.write("Transcribing audio...")
                         transcript_text = transcribe_audio(uploaded_file)
-                        est_cost += 0.01 
+                        if "Error" not in transcript_text:
+                            est_cost += 0.01 
                     
-                    if transcript_text: st.write(f"✅ Context Loaded.")
+                    if transcript_text and "Error" not in transcript_text: st.write(f"✅ Context Loaded.")
+                    else: st.error(f"File processing error: {transcript_text}")
                 except Exception as e:
-                    st.error(f"Error: {e}")
+                    st.error(f"File processing failed: {e}")
                     st.stop()
                 status.update(label="Context Ready!", state="complete", expanded=False)
 
@@ -381,7 +409,7 @@ if st.button("Start Elite Workflow", type="primary", use_container_width=True):
             status.update(label=f"✍️ Agent 2: Claude is writing ({tone_setting} tone)...", state="running")
             blog_post = agent_writer(topic, research_data, style_sample, tone_setting, keywords, transcript_text, claude_model_select)
             if blog_post:
-                st.session_state['elite_blog_v6'] = blog_post
+                st.session_state['elite_blog_v8'] = blog_post
                 est_cost += 0.05 
             else:
                 status.update(label="Writing Failed", state="error")
@@ -395,17 +423,18 @@ if st.button("Start Elite Workflow", type="primary", use_container_width=True):
             # 4. ART
             status.update(label="🎨 Agent 4: DALL-E is painting...", state="running")
             image_url = agent_artist(topic)
-            st.session_state['elite_image_v6'] = image_url
-            est_cost += 0.04 
+            if image_url:
+                est_cost += 0.04 
             
+            st.session_state['elite_image_v8'] = image_url
             st.session_state['est_cost'] = est_cost
             status.update(label="Workflow Complete!", state="complete", expanded=False)
 
 # PREVIEW AREA
-if 'elite_blog_v6' in st.session_state:
-    post = st.session_state['elite_blog_v6']
+if 'elite_blog_v8' in st.session_state:
+    post = st.session_state['elite_blog_v8']
     socials = st.session_state.get('elite_socials', {})
-    img_url = st.session_state.get('elite_image_v6', '')
+    img_url = st.session_state.get('elite_image_v8', '')
     
     st.divider()
     c1, c2 = st.columns([3, 1])
@@ -419,8 +448,9 @@ if 'elite_blog_v6' in st.session_state:
         col1, col2 = st.columns([1, 2])
         with col1:
             if img_url: st.image(img_url, caption="Header", use_container_width=True)
+            else: st.info("Image generation skipped or failed (Check OpenAI Key).")
         with col2:
-            final_img = st.text_input("Image URL", value=img_url)
+            final_img = st.text_input("Feature Image URL", value=img_url or "", help="Paste your own image URL here, or use the generated one.")
 
         title = st.text_input("Title", value=post.get('title', ''))
         with st.expander("SEO Metadata"):
@@ -435,7 +465,7 @@ if 'elite_blog_v6' in st.session_state:
                 post.update({'title': title, 'excerpt': excerpt, 'meta_title': meta_title, 'meta_description': meta_desc, 'html_content': content})
                 tags = ["Elite AI"]
                 if uploaded_file: tags.append("Context Aware")
-                result = publish_to_ghost(post, final_img, tags)
+                result = publish_to_ghost(post, final_img, tags) 
                 if result.status_code in [200, 201]:
                     st.balloons()
                     st.success("Success! Draft created.")
@@ -464,3 +494,4 @@ if 'elite_blog_v6' in st.session_state:
         rd_text = socials.get('reddit', '')
         st.text_area("Reddit Draft", value=rd_text, height=100)
         st.link_button("Post to Reddit", generate_social_links(rd_text, "reddit"))
+````
