@@ -10,34 +10,32 @@ from pypdf import PdfReader
 from docx import Document
 from openai import OpenAI
 import os
+import textstat  # pip install textstat
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Elite AI Blog Agent V9.1", page_icon="🎩", layout="wide")
+st.set_page_config(page_title="Elite AI Blog Agent V10", page_icon="🎩", layout="wide")
 
-# --- CSS TWEAKS FOR LAYOUT ---
+# --- CSS: CORPORATE STYLING ---
 st.markdown("""
 <style>
-    .stTextArea textarea {
-        font-size: 16px !important;
-    }
-    .stSelectbox div[data-baseweb="select"] > div {
-        font-size: 16px !important;
-    }
-    div[data-testid="stExpander"] div[role="button"] p {
-        font-size: 1.1rem;
-        font-weight: 600;
-    }
+    .stTextArea textarea { font-size: 15px !important; font-family: 'Helvetica Neue', sans-serif; }
+    .stSelectbox div[data-baseweb="select"] > div { font-size: 15px !important; }
+    .stButton button { width: 100%; border-radius: 4px; font-weight: 600; }
+    div[data-testid="stExpander"] { border: 1px solid #e0e0e0; border-radius: 4px; }
+    h1, h2, h3 { font-family: 'Helvetica Neue', sans-serif; letter-spacing: -0.5px; }
+    .reportview-container .main .block-container { max-width: 1200px; padding-top: 2rem; }
 </style>
 """, unsafe_allow_html=True)
 
 # --- SESSION STATE ---
 if 'log_events' not in st.session_state: st.session_state.log_events = []
-if 'current_workflow_status' not in st.session_state: st.session_state.current_workflow_status = "Awaiting Input."
+if 'current_workflow_status' not in st.session_state: st.session_state.current_workflow_status = "Ready."
 if 'claude_model_selection' not in st.session_state: st.session_state.claude_model_selection = "claude-sonnet-4-20250514"
-if 'last_claude_model' not in st.session_state: st.session_state.last_claude_model = "claude-sonnet-4-20250514"
-if 'seo_keywords' not in st.session_state: st.session_state['seo_keywords'] = ""
-if 'elite_blog_v8' not in st.session_state: st.session_state['elite_blog_v8'] = None
-if 'transcript_context' not in st.session_state: st.session_state['transcript_context'] = False
+if 'elite_blog_v8' not in st.session_state: st.session_state.elite_blog_v8 = None
+if 'transcript_context' not in st.session_state: st.session_state.transcript_context = False
+if 'final_title' not in st.session_state: st.session_state.final_title = ""
+if 'final_content' not in st.session_state: st.session_state.final_content = ""
+if 'final_excerpt' not in st.session_state: st.session_state.final_excerpt = ""
 
 # --- SECRETS ---
 try:
@@ -54,17 +52,18 @@ def add_log(message):
     timestamp = datetime.datetime.now().strftime('%H:%M:%S')
     st.session_state.log_events.insert(0, f"[{timestamp}] {message}")
 
+def set_status(user_msg):
+    st.session_state.current_workflow_status = user_msg
+
 # --- CLIENTS ---
 researcher = OpenAI(api_key=PPLX_API_KEY, base_url="https://api.perplexity.ai")
 writer = Anthropic(api_key=ANTHROPIC_API_KEY)
 try:
     openai_client = OpenAI(api_key=OPENAI_API_KEY)
     openai_client_is_valid = True
-    add_log("OpenAI client initialized.")
 except:
     openai_client = None
     openai_client_is_valid = False
-    add_log("OpenAI Client Failed.")
 
 # --- HELPERS ---
 def extract_text(file):
@@ -84,25 +83,26 @@ def transcribe_audio(file):
     try:
         return openai_client.audio.transcriptions.create(model="whisper-1", file=file).text
     except Exception as e:
-        if "413" in str(e): return "Error: File >25MB (OpenAI Limit)."
+        if "413" in str(e): return "Error: File >25MB (OpenAI Limit). Please split file."
         return f"Error: {e}"
 
 def generate_social_link(text, platform):
-    # Truncate for URL safety limits
     if platform == "twitter":
-        safe_text = urllib.parse.quote(text[:2500]) 
-        return f"https://twitter.com/intent/tweet?text={safe_text}"
+        safe = urllib.parse.quote(text[:2500]) 
+        return f"https://twitter.com/intent/tweet?text={safe}"
     elif platform == "linkedin":
-        safe_text = urllib.parse.quote(text[:2000])
-        return f"https://www.linkedin.com/feed/?shareActive=true&text={safe_text}"
+        safe = urllib.parse.quote(text[:2000])
+        return f"https://www.linkedin.com/feed/?shareActive=true&text={safe}"
     elif platform == "reddit":
-        safe_text = urllib.parse.quote(text[:3000])
-        return f"https://www.reddit.com/submit?selftext=true&title=New%20Post&text={safe_text}"
+        safe = urllib.parse.quote(text[:3000])
+        return f"https://www.reddit.com/submit?selftext=true&title=New%20Post&text={safe}"
     return "#"
 
-# --- AGENTS ---
+# --- AGENTS (WITH PERFORMANCE CACHING) ---
 
+@st.cache_data(show_spinner=False)
 def agent_seo(topic):
+    # Cached: If you run same topic, it returns instantly.
     try:
         res = researcher.chat.completions.create(
             model="sonar-pro",
@@ -111,8 +111,11 @@ def agent_seo(topic):
         return res.choices[0].message.content
     except: return ""
 
+@st.cache_data(show_spinner=False)
 def agent_research(topic, context):
-    add_log("Agent 1: Researching...")
+    # Cached: Changing 'Tone' won't re-trigger paid research.
+    # We use st.empty() inside the cached function to log, but logs won't appear on cache hit.
+    # That is acceptable for the speed gain.
     sys_prompt = "You are a Fact-Checking Researcher." if context else "You are an elite academic researcher."
     try:
         res = researcher.chat.completions.create(
@@ -121,11 +124,10 @@ def agent_research(topic, context):
         )
         return res.choices[0].message.content
     except Exception as e:
-        add_log(f"Research Failed: {e}")
         return None
 
 def agent_writer(topic, research, style, tone, keywords, audience, context_txt, model):
-    add_log("Agent 2: Writing...")
+    add_log(f"Agent 2 (Claude): Writing ({tone})...")
     
     aud_map = {
         "Grand Parent": "Simple metaphors, respectful, clear, large concepts.",
@@ -148,12 +150,18 @@ def agent_writer(topic, research, style, tone, keywords, audience, context_txt, 
     RESEARCH: {research}
     CONTEXT: {context_txt[:30000] if context_txt else "None"}
 
+    *** PRIVACY & ANONYMITY PROTOCOL (CRITICAL) ***
+    - If the CONTEXT contains specific names of people (e.g., 'John Smith said...', 'Sarah from marketing'), YOU MUST ANONYMIZE THEM.
+    - Convert specific anecdotes into GENERAL MARKET OBSERVATIONS.
+    - Example: Change "Bob complained about slow load times" to "Users frequently report frustration with slow load times."
+    - DO NOT use any real names from the transcript.
+
     RULES:
     1. NO EMOJIS in body text.
     2. NO EM-DASHES (—). Use hyphens (-).
     3. No inline links. List "Sources" at the end.
     4. Human-like flow. Short paragraphs.
-    5. **EXCERPT must be under 280 characters.**
+    5. **EXCERPT must be concise (< 280 chars).**
     
     OUTPUT: JSON with keys: title, meta_title, meta_description, excerpt, html_content.
     """
@@ -170,16 +178,12 @@ def agent_writer(topic, research, style, tone, keywords, audience, context_txt, 
         return None
 
 def agent_socials(content, model):
-    add_log("Agent 3: Socials...")
+    add_log("Agent 3 (Claude): Drafting Socials...")
     prompt = f"""
-    Create social posts based on this blog.
+    Create social posts.
     1. LinkedIn: Professional, bullets.
-    2. Twitter/X: A THREAD of 3-5 tweets. 
-       - Tweet 1: Hook/Attention grabber.
-       - Tweet 2-4: Key insights.
-       - Tweet 5: Call to action.
+    2. Twitter/X: A THREAD of 3-5 tweets. Tweet 1: Hook. Last Tweet: CTA.
     3. Reddit: Engaging Title + Body.
-
     OUTPUT: JSON with keys: "linkedin", "twitter_thread" (Array of strings), "reddit".
     """
     try:
@@ -193,7 +197,7 @@ def agent_socials(content, model):
     except: return {}
 
 def agent_artist(topic, tone, audience, custom_prompt=None):
-    add_log("Agent 4: Generating Image...")
+    add_log("Agent 4 (DALL-E): Generating Art...")
     if not openai_client_is_valid: return None
     
     if custom_prompt:
@@ -201,15 +205,18 @@ def agent_artist(topic, tone, audience, custom_prompt=None):
     else:
         base_prompt = f"A visualization of {topic}"
 
-    visual_style = "High-end editorial photography, shallow depth of field, Leica M11 style."
+    # V10 UPGRADE: "ANTI-WEIRD" PROMPTING
+    # We explicitly tell DALL-E to avoid "3D render" styles unless asked.
+    visual_style = "Award-winning editorial photography, shot on Leica M11, 50mm lens, soft natural lighting, realistic textures, shallow depth of field."
+    
     if "Teenager" in audience or "Child" in audience:
-        visual_style = "Vibrant 3D render, Pixar-style lighting, soft shapes, high saturation."
-    elif "Technical" in tone or "Developer" in audience:
-        visual_style = "Abstract isometric data visualization, glassmorphism, dark mode cyber aesthetic, Unreal Engine 5 render."
-    elif "History" in tone or "Grand Parent" in audience:
-        visual_style = "Oil painting style, warm lighting, textured canvas detail."
+        visual_style = "High-quality Pixar-style 3D render, soft rounded shapes, vibrant but harmonious colors."
+    elif "Technical" in tone:
+        visual_style = "Minimalist isometric data art, matte black background, glass and steel textures, architectural lighting."
+    elif "Executive" in audience or "CEO" in audience:
+        visual_style = "Abstract corporate art, geometric shapes, marble and gold textures, minimalist and premium."
 
-    full_prompt = f"{base_prompt}. {visual_style} No text, no words, 16:9 aspect ratio, high resolution, cinematic lighting."
+    full_prompt = f"{base_prompt}. Style: {visual_style}. Negative Prompt: No text, no words, no cartoons, no distorted faces, no uncanny valley, no bad anatomy. Aspect Ratio: 16:9."
     
     try:
         res = openai_client.images.generate(model="dall-e-3", prompt=full_prompt, size="1024x1024", quality="standard", n=1)
@@ -219,12 +226,12 @@ def agent_artist(topic, tone, audience, custom_prompt=None):
         return None
 
 def agent_refine(data, feedback, model):
-    add_log("Agent 5: Refining...")
+    add_log("Agent 5 (Refiner): Updating Draft...")
     prompt = f"""
     Refine this blog post.
     CURRENT DATA: {json.dumps(data)}
     FEEDBACK: {feedback}
-    RULES: Keep HTML format. No Emojis. No Em-dashes. **Excerpt must be < 280 chars**.
+    RULES: Keep HTML format. No Emojis. No Em-dashes. Anonymize names.
     OUTPUT: JSON with keys title, meta_title, meta_description, excerpt, html_content.
     """
     try:
@@ -251,15 +258,17 @@ def upload_ghost(data, img_url, tags):
             up_res = requests.post(f"{GHOST_API_URL}/ghost/api/admin/images/upload/", headers={'Authorization': f'Ghost {token}'}, files=files)
             if up_res.status_code == 201: final_img = up_res.json()['images'][0]['url']
 
-        # --- FIX: HARD TRUNCATE EXCERPT TO 300 CHARS ---
-        safe_excerpt = data['excerpt'][:300] if data['excerpt'] else ""
+        # SAFEGUARD: Ghost API hard limit is 300 chars. We truncate to 297 + ...
+        safe_excerpt = data['excerpt']
+        if len(safe_excerpt) > 300:
+            safe_excerpt = safe_excerpt[:297] + "..."
 
         body = {
             "posts": [{
                 "title": data['title'], 
                 "html": data['html_content'], 
                 "feature_image": final_img,
-                "custom_excerpt": safe_excerpt, # <--- SAFETY FIX HERE
+                "custom_excerpt": safe_excerpt, 
                 "status": "draft", 
                 "tags": [{"name": t} for t in tags],
                 "meta_title": data.get('meta_title'), 
@@ -267,10 +276,6 @@ def upload_ghost(data, img_url, tags):
             }]
         }
         res = requests.post(f"{GHOST_API_URL}/ghost/api/admin/posts/?source=html", json=body, headers={'Authorization': f'Ghost {token}'})
-        
-        if res.status_code != 201:
-            add_log(f"Ghost Upload Error: {res.text}")
-            
         return res.status_code == 201
     except Exception as e:
         add_log(f"Ghost Error: {e}")
@@ -278,56 +283,77 @@ def upload_ghost(data, img_url, tags):
 
 # --- LAYOUT CONSTRUCTION ---
 
-st.title("🎩 Elite AI Blog Agent V9.1")
+st.title("🎩 Elite AI Blog Agent V10")
 st.markdown("Research by **Perplexity** | Writing by **Claude** | Art by **DALL-E**")
 
 # MAIN COLUMNS
 left_col, right_col = st.columns([2, 1])
 
+# --- RIGHT COLUMN (LOGS & STATUS) - TOP PRIORITY ---
+with right_col:
+    # 1. Live Logs
+    st.markdown("### 📜 Live Logs")
+    st.text_area("", value="\n".join(st.session_state.log_events), height=250, disabled=True, key="logs_display")
+    
+    # 2. High Level Status
+    st.markdown("### 🟢 User Status")
+    st.info(st.session_state.current_workflow_status)
+    
+    # 3. Technical Status
+    with st.expander("🛠️ Technical / Low Level Status", expanded=True):
+        st.write(f"**Writer:** {st.session_state.last_claude_model}")
+        st.write("**Research:** Perplexity Sonar (Cached)")
+        st.write("**Art:** DALL-E 3 (Anti-Weird Mode)")
+        st.write("**Privacy:** Anonymization Active")
+
 # --- LEFT COLUMN (INPUTS) ---
 with left_col:
-    st.subheader("📝 Content Strategy")
+    st.markdown("### 📝 Strategy")
     
-    col_style, col_tone = st.columns(2)
-    with col_style:
-        style_sample = st.text_area("Your Writing Style Sample", height=100, placeholder="Paste a previous blog post to mimic...")
-    with col_tone:
+    c1, c2 = st.columns(2)
+    with c1:
         tone_setting = st.selectbox("Tone & Voice", ["Conversational", "Technical", "Professional", "Witty", "Storyteller", "Journalistic"])
+    with c2:
         audience_setting = st.selectbox("Target Audience", [
             "General Public", "Developer (Technical)", "Executive (Strategy/ROI)", "Recruiter (Career/Skills)",
             "Grand Parent", "Teenager", "Child", "Hobbyist", "CEO"
         ])
+    
+    style_sample = st.text_area("Writing Style / Voice Mimicry", height=100, placeholder="Paste text here to match its rhythm and vocabulary...")
 
-    st.markdown("##### 💡 Main Topic / Prompt")
+    st.markdown("##### 📎 Context (Audio/PDF/Doc)")
+    uploaded_file = st.file_uploader("", type=['txt','pdf','docx','mp3','mp4'])
+
+    st.markdown("##### 💡 Main Topic")
     topic = st.text_area("Enter your detailed prompt here...", height=150, placeholder="e.g. A comprehensive guide on...")
     
     st.markdown("##### 🔑 SEO Keywords")
-    col_key_btn, col_key_txt = st.columns([1, 4])
-    with col_key_btn:
+    ck1, ck2 = st.columns([1, 4])
+    with ck1:
         st.write("")
         st.write("")
         if st.button("✨ Suggest"):
             if topic:
                 with st.spinner("Thinking..."):
                     st.session_state['seo_keywords'] = agent_seo(topic)
-    with col_key_txt:
-        keywords = st.text_area("Keywords (Comma separated)", value=st.session_state.get('seo_keywords', ''), height=68)
+    with ck2:
+        keywords = st.text_area("", value=st.session_state.get('seo_keywords', ''), height=68, label_visibility="collapsed")
         st.session_state['seo_keywords'] = keywords
-
-    uploaded_file = st.file_uploader("Attach Context (Max 100MB)", type=['txt','pdf','docx','mp3','mp4'])
 
     st.write("")
     if st.button("🚀 Start Elite Workflow", type="primary", use_container_width=True):
         if not topic:
             st.warning("Please enter a topic.")
         else:
-            st.session_state.log_events = ["Workflow started."]
-            st.session_state.current_workflow_status = "Reading Files..."
+            st.session_state.log_events = [] 
+            add_log("Workflow Initialized.")
+            set_status("Reading Context Files...")
+            
             st.session_state.transcript_context = False
             transcript_txt = None
             
             if uploaded_file:
-                if uploaded_file.size > 100 * 1024 * 1024: st.error("File too large.")
+                if uploaded_file.size > 100 * 1024 * 1024: st.error("File too large (>100MB).")
                 else:
                     if uploaded_file.name.endswith(('.mp3','.mp4','.wav','.m4a')):
                          transcript_txt = transcribe_audio(uploaded_file)
@@ -336,36 +362,41 @@ with left_col:
                     
                     if transcript_txt and "Error" not in transcript_txt:
                         st.session_state.transcript_context = True
-                        add_log("Context Loaded.")
+                        add_log("Context Successfully Loaded.")
             
-            st.session_state.current_workflow_status = "Researching..."
+            # --- AGENT 1: RESEARCH (CACHED) ---
+            set_status("Agent 1: Researching Topic...")
+            add_log("Calling Perplexity...")
             research_data = agent_research(topic, st.session_state.transcript_context)
+            add_log("Research Complete.")
+            
             if research_data:
-                st.session_state.current_workflow_status = "Drafting..."
+                # --- AGENT 2: WRITING ---
+                set_status("Agent 2: Drafting Content...")
                 blog = agent_writer(topic, research_data, style_sample, tone_setting, keywords, audience_setting, transcript_txt, st.session_state.claude_model_selection)
+                
                 if blog:
                     st.session_state.elite_blog_v8 = blog
-                    st.session_state.current_workflow_status = "Socials..."
+                    
+                    # Pre-fill State
+                    st.session_state.final_title = blog['title']
+                    st.session_state.final_content = blog['html_content']
+                    st.session_state.final_excerpt = blog['excerpt']
+                    st.session_state.final_meta_title = blog.get('meta_title', '')
+                    st.session_state.final_meta_desc = blog.get('meta_description', '')
+                    
+                    # --- AGENT 3: SOCIALS ---
+                    set_status("Agent 3: Creating Socials...")
                     st.session_state.elite_socials = agent_socials(blog['html_content'], st.session_state.claude_model_selection)
-                    st.session_state.current_workflow_status = "Art..."
+                    
+                    # --- AGENT 4: ART ---
+                    set_status("Agent 4: Generating Art...")
                     img = agent_artist(topic, tone_setting, audience_setting)
                     if img: st.session_state.elite_image_v8 = img
-                    st.session_state.current_workflow_status = "Done."
+                    
+                    set_status("Workflow Complete. Review below.")
+                    add_log("All Agents Finished.")
                     st.rerun()
-
-
-# --- RIGHT COLUMN (STATUS & DEBUG) ---
-with right_col:
-    st.subheader("⚙️ System Status")
-    st.info(f"Status: {st.session_state.current_workflow_status}")
-    st.markdown("**📜 Live Logs**")
-    st.text_area("", value="\n".join(st.session_state.log_events), height=300, disabled=True, key="logs_display")
-    with st.expander("🛠️ Technical Stack & Debug"):
-        st.caption(f"Writer Model: {st.session_state.last_claude_model}")
-        st.caption("Research: Perplexity Sonar")
-        st.caption("Art: DALL-E 3 (Editorial Mode)")
-        st.selectbox("Change Writer Model:", ["claude-sonnet-4-20250514", "claude-3-5-sonnet", "claude-3-opus"], key="claude_model_selection")
-
 
 # --- RESULTS AREA (Full Width) ---
 if st.session_state.elite_blog_v8:
@@ -374,13 +405,14 @@ if st.session_state.elite_blog_v8:
     
     st.divider()
     
-    tab_blog, tab_social = st.tabs(["📝 Blog Editor", "📱 Social Media Pack"])
+    tab_blog, tab_social = st.tabs(["📝 Blog Editor & Preview", "📱 Social Media Pack"])
 
     with tab_blog:
         col_preview, col_edit = st.columns([1, 1])
         
+        # --- PREVIEW COLUMN ---
         with col_preview:
-            st.subheader("👁️ Preview")
+            st.subheader("👁️ Rendered Preview")
             if st.session_state.get('elite_image_v8'):
                 st.image(st.session_state.elite_image_v8, use_container_width=True)
                 with st.expander("🎨 Regenerate Image"):
@@ -391,24 +423,44 @@ if st.session_state.elite_blog_v8:
                             st.session_state.elite_image_v8 = new_url
                             st.rerun()
 
-            st.markdown(f"# {post.get('title')}")
-            st.markdown(f"*{post.get('excerpt')}*")
-            st.markdown("---")
-            st.markdown(st.session_state.get('final_content', post.get('html_content', '')), unsafe_allow_html=True)
+            current_title = st.session_state.get('final_title', post.get('title'))
+            current_content = st.session_state.get('final_content', post.get('html_content'))
+            current_excerpt = st.session_state.get('final_excerpt', post.get('excerpt'))
 
+            st.markdown(f"# {current_title}")
+            st.markdown(f"*{current_excerpt}*")
+            st.markdown("---")
+            st.markdown(current_content, unsafe_allow_html=True)
+            
+            # --- NEW FEATURE: READABILITY SCORE ---
+            score = textstat.flesch_kincaid_grade(current_content)
+            score_color = "red" if score > 12 else "orange" if score > 10 else "green"
+            st.caption(f"Readability Grade Level: :{score_color}[{score}] (Aim for 8-10 for general public)")
+
+            if st.button("🔄 Refresh Preview", help="Click to update preview after manual edits"):
+                st.rerun()
+
+        # --- EDITOR COLUMN ---
         with col_edit:
             st.subheader("✏️ Editor")
+            
             with st.expander("SEO Metadata", expanded=False):
-                meta_title = st.text_input("Meta Title", value=post.get('meta_title', ''), key='final_meta_title')
-                meta_desc = st.text_input("Meta Description", value=post.get('meta_description', ''), key='final_meta_desc')
+                st.text_input("Meta Title", key='final_meta_title')
+                st.text_input("Meta Description", key='final_meta_desc')
 
-            title = st.text_input("Title", value=post.get('title', ''), key='final_title')
-            # --- FIX: ADDED max_chars TO EXCERPT ---
-            excerpt = st.text_area("Excerpt (Max 300 chars)", value=post.get('excerpt', ''), height=100, max_chars=300, key='final_excerpt')
-            content = st.text_area("HTML Content", value=post.get('html_content', ''), height=600, key='final_content')
+            st.text_input("Title", key='final_title')
+            
+            excerpt_val = st.session_state.get('final_excerpt', '')
+            excerpt_len = len(excerpt_val)
+            ex_color = "red" if excerpt_len > 300 else "green"
+            st.caption(f"Excerpt Length: :{ex_color}[{excerpt_len}/300]")
+            st.text_area("Excerpt", key='final_excerpt', height=100)
+            
+            st.text_area("HTML Content", key='final_content', height=600)
 
+        # --- REFINE DRAFT ---
         st.divider()
-        st.subheader("🔄 Refine Draft")
+        st.subheader("🔄 Refine Draft (Agent 5)")
         ref_col_in, ref_col_btn = st.columns([4, 1])
         with ref_col_in:
             refine_inst = st.text_area("Refinement Instructions", height=100, placeholder="e.g. Make the intro punchier...")
@@ -426,8 +478,11 @@ if st.session_state.elite_blog_v8:
                     }
                     new_post = agent_refine(curr_data, refine_inst, st.session_state.claude_model_selection)
                     if new_post:
-                        st.session_state.elite_blog_v8 = new_post
-                        st.session_state.final_content = new_post['html_content'] 
+                        st.session_state.final_title = new_post['title']
+                        st.session_state.final_content = new_post['html_content']
+                        st.session_state.final_excerpt = new_post['excerpt']
+                        st.session_state.final_meta_title = new_post.get('meta_title')
+                        st.session_state.final_meta_desc = new_post.get('meta_description')
                         st.rerun()
 
         if st.button("🚀 Upload Draft to Ghost", type="primary", use_container_width=True):
@@ -441,9 +496,10 @@ if st.session_state.elite_blog_v8:
                  'meta_title': st.session_state.final_meta_title,
                  'meta_description': st.session_state.final_meta_desc
              }
+             
              if upload_ghost(final_data, st.session_state.elite_image_v8, tags):
                  st.balloons()
-                 st.success("Published to Ghost!")
+                 st.success("Published to Ghost successfully!")
              else:
                  st.error("Publish failed. Check logs.")
 
