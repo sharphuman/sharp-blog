@@ -21,9 +21,8 @@ except ImportError:
     textstat_installed = False
 
 # --- CONFIGURATION & NEON THEME ---
-st.set_page_config(page_title="Elite AI Blog Agent V13", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="Elite AI Blog Agent V13.1", page_icon="🧠", layout="wide")
 
-# Custom CSS for "Sharp Human" Neon/Black Theme
 st.markdown("""
 <style>
     /* MAIN BACKGROUND */
@@ -37,7 +36,7 @@ st.markdown("""
         font-family: 'Helvetica Neue', sans-serif !important;
     }
     
-    /* SQUARE FILE UPLOADER CENTERED */
+    /* SQUARE FILE UPLOADER */
     div[data-testid="stFileUploader"] section {
         background-color: #161b22;
         border: 2px dashed #00e5ff; 
@@ -52,9 +51,7 @@ st.markdown("""
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
     }
-
-    /* STATUS BOXES */
-    div[data-testid="stMarkdownContainer"] p { font-size: 1.0rem; }
+    
     .stAlert { background-color: #1c1c1c; border: 1px solid #333; color: #00e5ff; }
 </style>
 """, unsafe_allow_html=True)
@@ -155,26 +152,44 @@ def agent_research(topic, context):
 
 def agent_writer(topic, research, style, tone, keywords, audience, context_txt, model):
     add_log(f"Agent 2: Writing...")
-    prompt = f"""
-    Write a blog post.
-    TOPIC: "{topic}"
-    AUDIENCE: {audience}
-    TONE: {tone}. {f"MIMIC STYLE: {style}" if style else ""}
-    KEYWORDS: {keywords}
-    RESEARCH: {research}
-    CONTEXT: {context_txt[:30000] if context_txt else "None"}
-
-    *** PRIVACY PROTOCOL ***
-    - **NEVER use real names** from the transcript. Generalize anecdotes.
-
-    RULES:
-    1. NO EMOJIS in body.
-    2. NO EM-DASHES.
-    3. No inline links.
-    4. **EXCERPT < 280 chars.**
     
-    OUTPUT: JSON with keys: title, meta_title, meta_description, excerpt, html_content.
+    # 🧠 THE UPGRADED BRAIN 🧠
+    prompt = f"""
+    You are a world-class Ghostwriter and Editor. You are writing a blog post.
+    
+    **STRATEGY:**
+    - TOPIC: "{topic}"
+    - AUDIENCE: {audience}
+    - TONE: {tone}
+    - KEYWORDS: {keywords}
+    
+    **DATA SOURCES:**
+    - RESEARCH: {research}
+    - CONTEXT FILE: {context_txt[:40000] if context_txt else "None"}
+
+    *** 🚨 CRITICAL INSTRUCTIONS: GENERALIZATION & PRIVACY 🚨 ***
+    1. **RAW DATA ONLY:** The CONTEXT FILE contains raw transcripts/interviews. 
+    2. **STRICT ANONYMITY:** You are FORBIDDEN from using names (e.g. "John", "Sarah", "The recruiter").
+    3. **MANDATORY TRANSFORMATION:** You MUST convert specific anecdotes into **general market observations**.
+       - *BAD:* "Steve, a recruiter with 5 years experience, told me candidates are ghosting."
+       - *GOOD:* "It is becoming a common trend in the market for recruiters to experience candidate ghosting."
+       - *GOOD:* "Industry veterans often note that..."
+    4. **NO SPECIFICS:** Do not mention "In the transcript" or "The file says". Treat the knowledge as if it is your own expert knowledge.
+
+    **EDITORIAL STANDARDS:**
+    - Write like a NYT Bestseller.
+    - {f"MIMIC THIS STYLE EXACTLY: {style}" if style else "Use a professional, high-impact voice."}
+    - Short paragraphs. Variable sentence length. No fluff.
+    
+    **FORMATTING:**
+    - NO EMOJIS in the body text.
+    - NO EM-DASHES (—). Use hyphens (-) or punctuation.
+    - **EXCERPT:** Must be < 280 characters.
+    
+    **OUTPUT FORMAT:**
+    Return ONLY a valid JSON object with keys: "title", "meta_title", "meta_description", "excerpt", "html_content".
     """
+    
     try:
         msg = writer.messages.create(model=model, max_tokens=8000, temperature=0.7, messages=[{"role": "user", "content": prompt}])
         track_cost("Anthropic", 0.03)
@@ -185,12 +200,15 @@ def agent_writer(topic, research, style, tone, keywords, audience, context_txt, 
 
 def agent_socials(blog_html, model):
     add_log("Agent 3: Creating Socials...")
-    clean_text = blog_html.replace("<p>", "").replace("</p>", "\n").replace("<h2>", "\n# ").replace("</h2>", "")[:15000]
+    clean_text = blog_html.replace("<p>", "").replace("</p>", "\n")[:15000]
     prompt = f"""
-    Create social posts based on this BLOG CONTENT: {clean_text}
+    Create social posts based on this BLOG:
+    {clean_text}
+    
     1. LinkedIn: Professional, bullets.
-    2. Twitter/X: THREAD of 3-5 tweets. Tweet 1: Hook. Last: CTA.
+    2. Twitter/X: THREAD (3-5 tweets). Tweet 1: Hook. Last: CTA.
     3. Reddit: Engaging Title + Body.
+    
     IMPORTANT: Return ONLY valid JSON.
     OUTPUT: JSON with keys: "linkedin", "twitter_thread" (Array of strings), "reddit".
     """
@@ -207,7 +225,7 @@ def agent_artist(topic, tone, audience, custom_prompt=None):
     if not openai_client_is_valid: return None
     
     base_prompt = custom_prompt if custom_prompt else f"A visualization of {topic}"
-    visual_style = "High-end editorial photography, shallow depth of field."
+    visual_style = "High-end editorial photography, shallow depth of field, Leica M11 style."
     if "Teenager" in audience or "Child" in audience: visual_style = "Vibrant 3D render, Pixar-style."
     elif "Technical" in tone: visual_style = "Isometric data art, matte black background."
 
@@ -265,7 +283,7 @@ def upload_ghost(data, img_url, tags):
 
 # --- UI LAYOUT ---
 
-st.title("🧠 Elite AI Blog Agent V13")
+st.title("🧠 Elite AI Blog Agent V13.1")
 st.markdown("Research by **Perplexity** | Writing by **Claude** | Art by **DALL-E**")
 
 img_prompt = st.text_input("🎨 Custom Image Description (Optional)", placeholder="Describe the image... (Leave empty for auto-gen)")
@@ -273,17 +291,14 @@ img_prompt = st.text_input("🎨 Custom Image Description (Optional)", placehold
 # --- 3-COLUMN LAYOUT ---
 col1, col2, col3 = st.columns([1, 1, 1])
 
-# LEFT: Style
 with col1:
     st.markdown("### ✍️ Style")
     style_sample = st.text_area("Voice Mimicry", height=200, placeholder="Paste text here...")
 
-# CENTER: Context (Square)
 with col2:
     st.markdown("### 📎 Context")
     uploaded_file = st.file_uploader("", type=['txt','pdf','docx','mp3','mp4'], label_visibility="collapsed")
 
-# RIGHT: Target & Logs
 with col3:
     st.markdown("### 🎯 Target")
     tone_setting = st.selectbox("Tone", ["Conversational", "Technical", "Professional", "Witty", "Storyteller", "Journalistic"])
@@ -292,7 +307,7 @@ with col3:
     st.markdown("#### 📜 Activity Log")
     st.text_area("", value="\n".join(st.session_state.log_events), height=100, disabled=True, key="logs_display")
 
-# --- TOPIC & KEYWORDS (Fixed Layout) ---
+# --- TOPIC & KEYWORDS ---
 st.markdown("---")
 c_topic, c_seo = st.columns([2, 1])
 
@@ -307,13 +322,13 @@ with c_seo:
     keywords = st.text_area("", value=st.session_state.seo_keywords, height=68, label_visibility="collapsed")
     st.session_state.seo_keywords = keywords
 
-# --- STATUS DASHBOARD (Restored) ---
+# --- STATUS & COST ---
 st.markdown("---")
 s1, s2 = st.columns(2)
 with s1:
     st.info(f"**Status:** {st.session_state.current_workflow_status}")
 with s2:
-    with st.expander("💰 Cost & Tech Specs", expanded=False):
+    with st.expander("💰 Costs & Specs", expanded=False):
         st.write(st.session_state.costs)
         st.write(f"Writer: {st.session_state.last_claude_model}")
 
@@ -325,7 +340,6 @@ if st.button("🚀 Start Elite Workflow", type="primary", use_container_width=Tr
         st.session_state.log_events = [] 
         add_log("Workflow Initialized.")
         st.session_state.current_workflow_status = "Processing Context..."
-        
         st.session_state.last_claude_model = st.session_state.claude_model_selection
         st.session_state.transcript_context = False
         transcript_txt = None
@@ -333,7 +347,6 @@ if st.button("🚀 Start Elite Workflow", type="primary", use_container_width=Tr
         if uploaded_file:
             if uploaded_file.name.endswith(('.mp3','.mp4','.wav','.m4a')): transcript_txt = transcribe_audio(uploaded_file)
             else: transcript_txt = extract_text(uploaded_file)
-            
             if transcript_txt and "Error" not in transcript_txt:
                 st.session_state.transcript_context = True
                 add_log("Context Loaded.")
@@ -365,11 +378,11 @@ if st.session_state.elite_blog_v8:
     t1, t2 = st.tabs(["📝 Review & Refine", "📱 Social Media"])
     
     with t1:
-        # WHITE BACKGROUND PREVIEW FIX
+        # WHITE PREVIEW FIX
         st.subheader("👁️ Preview")
         if st.session_state.get('elite_image_v8'): st.image(st.session_state.elite_image_v8, use_container_width=True)
         
-        # We inject styles to force the HTML preview to be white paper with black text
+        # HTML Component for safe rendering (White on Black app)
         html_preview = f"""
         <div style="background-color: white; color: black; padding: 40px; border-radius: 10px; font-family: sans-serif;">
             <h1 style="color: black;">{st.session_state.final_title}</h1>
@@ -380,7 +393,6 @@ if st.session_state.elite_blog_v8:
         """
         components.html(html_preview, height=600, scrolling=True)
 
-        # REFINE SECTION (Restored)
         st.markdown("### 🔄 Refine Draft")
         c_ref_txt, c_ref_btn = st.columns([3, 1])
         with c_ref_txt:
@@ -402,7 +414,6 @@ if st.session_state.elite_blog_v8:
                         st.session_state.final_excerpt = new_post['excerpt']
                         st.rerun()
 
-        # EDITORS
         with st.expander("✏️ Manual Editor"):
             st.text_input("Title", key='final_title')
             st.text_area("Excerpt (Max 300)", key='final_excerpt', max_chars=300)
@@ -411,7 +422,6 @@ if st.session_state.elite_blog_v8:
         if st.button("🚀 Publish to Ghost", type="primary"):
             tags = ["Elite AI"]
             if st.session_state.transcript_context: tags.append("Context Aware")
-            
             final_data = {
                 'title': st.session_state.final_title,
                 'excerpt': st.session_state.final_excerpt,
